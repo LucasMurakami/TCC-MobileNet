@@ -1,0 +1,61 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache and bytecode
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Jupyter / notebook checkpoints
+.ipynb_checkpoints/
+
+# Local environment / tooling
+.env
+.env.*
+*.log
+
+# Model training outputs
+outputs/
+checkpoints/
+logs/
+out/
+results/
+*.h5
+*.keras
+*.weights
+*.ckpt
+*.pb
+*.onnx
+
+# Dataset caches and generated data
+dataset_treino/
+*.zip
+*.tar
+*.tgz
+
+# Local raw dataset cache (do not track)
+data_cache/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# TensorBoard / profiling
+.tfevents*
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Optional: keep generated reports tracked if desired
+mobilenet_outputs/
+mobilenetv5_output/
+mobilenet_test_output
+mobilenetv5_test_run/
