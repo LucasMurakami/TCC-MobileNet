@@ -1,5 +1,5 @@
 """
-PyTorch & timm Pretrained Models Trainer (MobileNetV4, MobileNetV5)
+PyTorch & timm Pretrained Models Trainer (MobileNet V1 - V5)
 Modular Hardware Accelerator Engine supporting all GPU architectures:
 - NVIDIA Blackwell (RTX 50xx), Ada Lovelace (RTX 40xx), Ampere (RTX 30xx, A100), Hopper (H100)
 - NVIDIA Turing (RTX 20xx, T4), Volta (V100), Pascal (GTX 10xx)
@@ -33,6 +33,8 @@ from torchvision import transforms
 import timm
 from tqdm import tqdm
 from sklearn.metrics import classification_report, confusion_matrix
+
+torch.backends.cudnn.enabled = False
 
 # ─── Modular Hardware Engine ────────────────────────────────────────────────
 
@@ -121,13 +123,13 @@ PAD_UFES20_LABEL_MAP = {
 }
 
 MODEL_CONFIGS = {
-    'v1':      {'timm_name': 'mobilenetv1_100',                        'input_size': 224, 'pretrained': 'ImageNet-1k (timm)'},
-    'v2':      {'timm_name': 'mobilenetv2_100',                        'input_size': 224, 'pretrained': 'ImageNet-1k (timm)'},
-    'v3small': {'timm_name': 'mobilenetv3_small_100',                  'input_size': 224, 'pretrained': 'ImageNet-1k (timm)'},
-    'v3large': {'timm_name': 'mobilenetv3_large_100',                  'input_size': 224, 'pretrained': 'ImageNet-1k (timm)'},
-    'v4conv':  {'timm_name': 'mobilenetv4_conv_medium.e500_r256_in1k', 'input_size': 256, 'pretrained': 'ImageNet-1k (Hugging Face / timm)'},
-    'v4convl': {'timm_name': 'mobilenetv4_conv_large.e500_r384_in1k',  'input_size': 384, 'pretrained': 'ImageNet-1k (Hugging Face / timm)'},
-    'v5':      {'timm_name': 'mobilenetv5_300m.gemma3n',               'input_size': 256, 'pretrained': 'Google Gemma3n Vision (Hugging Face / timm)'},
+    'v1':      {'timm_name': 'mobilenetv1_100',                        'input_size': 224, 'default_lr1': 1e-3, 'default_lr2': 1e-4, 'weight_decay': 1e-4, 'pretrained': 'ImageNet-1k (timm)'},
+    'v2':      {'timm_name': 'mobilenetv2_100',                        'input_size': 224, 'default_lr1': 1e-3, 'default_lr2': 1e-4, 'weight_decay': 1e-4, 'pretrained': 'ImageNet-1k (timm)'},
+    'v3small': {'timm_name': 'mobilenetv3_small_100',                  'input_size': 224, 'default_lr1': 1e-3, 'default_lr2': 1e-4, 'weight_decay': 1e-4, 'pretrained': 'ImageNet-1k (timm)'},
+    'v3large': {'timm_name': 'mobilenetv3_large_100',                  'input_size': 224, 'default_lr1': 1e-3, 'default_lr2': 1e-4, 'weight_decay': 1e-4, 'pretrained': 'ImageNet-1k (timm)'},
+    'v4conv':  {'timm_name': 'mobilenetv4_conv_medium.e500_r256_in1k', 'input_size': 256, 'default_lr1': 1e-3, 'default_lr2': 5e-5, 'weight_decay': 1e-4, 'pretrained': 'ImageNet-1k (Hugging Face / timm)'},
+    'v4convl': {'timm_name': 'mobilenetv4_conv_large.e500_r384_in1k',  'input_size': 384, 'default_lr1': 1e-3, 'default_lr2': 5e-5, 'weight_decay': 1e-4, 'pretrained': 'ImageNet-1k (Hugging Face / timm)'},
+    'v5':      {'timm_name': 'mobilenetv5_300m.gemma3n',               'input_size': 256, 'default_lr1': 5e-4, 'default_lr2': 2e-5, 'weight_decay': 5e-4, 'pretrained': 'Google Gemma3n Vision (Hugging Face / timm)'},
 }
 
 
@@ -176,92 +178,14 @@ def compute_class_weights(labels_series: pd.Series) -> dict:
     return {k: (v / w_sum) * NUM_CLASSES for k, v in weights.items()}
 
 
-def plot_training_curves(histories, stage_names, output_path, model_name=""):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-    all_train_acc, all_val_acc = [], []
-    all_train_loss, all_val_loss = [], []
-
-    for h in histories:
-        all_train_acc.extend(h['accuracy'])
-        all_val_acc.extend(h['val_accuracy'])
-        all_train_loss.extend(h['loss'])
-        all_val_loss.extend(h['val_loss'])
-
-    epochs_range = range(1, len(all_train_acc) + 1)
-    ax1.plot(epochs_range, all_train_acc, label='Train Accuracy', color='#1f77b4', lw=2, marker='o', markersize=4)
-    ax1.plot(epochs_range, all_val_acc, label='Val Accuracy', color='#ff7f0e', lw=2, marker='s', markersize=4)
-    ax1.set_title(f'{model_name.upper()} - Accuracy', fontsize=12, fontweight='bold')
-    ax1.set_xlabel('Epoch')
-    ax1.set_ylabel('Accuracy')
-    ax1.grid(True, linestyle='--', alpha=0.6)
-    ax1.legend()
-
-    ax2.plot(epochs_range, all_train_loss, label='Train Loss', color='#1f77b4', lw=2, marker='o', markersize=4)
-    ax2.plot(epochs_range, all_val_loss, label='Val Loss', color='#ff7f0e', lw=2, marker='s', markersize=4)
-    ax2.set_title(f'{model_name.upper()} - Focal Loss', fontsize=12, fontweight='bold')
-    ax2.set_xlabel('Epoch')
-    ax2.set_ylabel('Loss')
-    ax2.grid(True, linestyle='--', alpha=0.6)
-    ax2.legend()
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-
-
-def plot_confusion_matrices(y_true, y_pred, class_names, output_path, model_name=""):
-    cm = confusion_matrix(y_true, y_pred, labels=range(len(class_names)))
-    with np.errstate(divide='ignore', invalid='ignore'):
-        cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-        cm_norm = np.nan_to_num(cm_norm)
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names, ax=ax1)
-    ax1.set_title(f'{model_name.upper()} - Sample Counts', fontweight='bold')
-    ax1.set_ylabel('True Label')
-    ax1.set_xlabel('Predicted Label')
-
-    sns.heatmap(cm_norm, annot=True, fmt='.1%', cmap='Blues', xticklabels=class_names, yticklabels=class_names, ax=ax2)
-    ax2.set_title(f'{model_name.upper()} - Normalized Sensitivity', fontweight='bold')
-    ax2.set_ylabel('True Label')
-    ax2.set_xlabel('Predicted Label')
-
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-
-
-def plot_per_class_metrics(report_dict, class_names, output_path, model_name=""):
-    precisions = [report_dict.get(c, {}).get('precision', 0.0) for c in class_names]
-    recalls = [report_dict.get(c, {}).get('recall', 0.0) for c in class_names]
-    f1s = [report_dict.get(c, {}).get('f1-score', 0.0) for c in class_names]
-
-    x = np.arange(len(class_names))
-    width = 0.25
-    fig, ax = plt.subplots(figsize=(12, 5))
-    ax.bar(x - width, precisions, width, label='Precision', color='#4C72B0')
-    ax.bar(x, recalls, width, label='Recall', color='#55A868')
-    ax.bar(x + width, f1s, width, label='F1-Score', color='#C44E52')
-
-    ax.set_title(f'{model_name.upper()} - Per-Class Performance', fontweight='bold')
-    ax.set_xticks(x)
-    ax.set_xticklabels(class_names)
-    ax.set_ylim(0, 1.1)
-    ax.grid(axis='y', linestyle='--', alpha=0.7)
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=300)
-    plt.close()
-
-
 def main():
     parser = argparse.ArgumentParser(description='Modular PyTorch/timm Pretrained Models Trainer')
     parser.add_argument('--model', type=str, required=True, choices=['v1', 'v2', 'v3', 'v3small', 'v3large', 'v4', 'v4conv', 'v4convl', 'v5'])
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--batch-size', type=int, default=32)
-    parser.add_argument('--lr-stage1', type=float, default=1e-3)
-    parser.add_argument('--lr-stage2', type=float, default=5e-5)
-    parser.add_argument('--patience', type=int, default=10)
+    parser.add_argument('--lr-stage1', type=float, default=None)
+    parser.add_argument('--lr-stage2', type=float, default=None)
+    parser.add_argument('--patience', type=int, default=8)
     parser.add_argument('--img-size', type=int, default=None)
     parser.add_argument('--train-csv', type=str, default=None, help='Path to train dataset CSV')
     parser.add_argument('--val-csv', type=str, default=None, help='Path to val dataset CSV')
@@ -308,11 +232,16 @@ def main():
     img_size = args.img_size or cfg['input_size']
     timm_name = cfg['timm_name']
 
+    lr_stage1 = args.lr_stage1 or cfg['default_lr1']
+    lr_stage2 = args.lr_stage2 or cfg['default_lr2']
+    weight_decay = cfg['weight_decay']
+
     print(f"\n{'='*75}")
     print(f" [Modular Accelerator Engine]")
     print(f" Device: {hw['device_name']} ({hw['vram_gb']:.1f} GB VRAM, {hw['device_count']} GPU(s))")
     print(f" Precision: {hw['precision_name']} | Target Batch: {args.batch_size} (Micro-batch: {micro_batch}, Accum: {grad_accum_steps})")
-    print(f" Loading Pretrained: {timm_name} ({cfg['pretrained']})")
+    print(f" Model: {args.model.upper()} ({timm_name}) | Pretrained: {cfg['pretrained']}")
+    print(f" Hyperparameters: LR Stage1={lr_stage1}, LR Stage2={lr_stage2}, WeightDecay={weight_decay}")
     print(f"{'='*75}")
 
     model = timm.create_model(timm_name, pretrained=True, num_classes=NUM_CLASSES)
@@ -327,7 +256,7 @@ def main():
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
         transforms.RandomRotation(30),
-        transforms.ColorJitter(brightness=0.15, contrast=0.15),
+        transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -344,7 +273,7 @@ def main():
     weight_tensor = torch.tensor([weights_dict[i] for i in range(NUM_CLASSES)], dtype=torch.float, device=device)
     criterion = PyTorchFocalLoss(alpha=weight_tensor, gamma=2.0)
 
-    # ── Stage 1: Freeze Backbone ──
+    # ── Stage 1: Freeze Backbone & Warmup Head ──
     for param in model.parameters():
         param.requires_grad = False
     base_model = model.module if hasattr(model, 'module') else model
@@ -353,9 +282,9 @@ def main():
         for param in head.parameters():
             param.requires_grad = True
 
-    stage1_epochs = max(min(args.epochs // 3, 15), 1)
-    optimizer1 = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=args.lr_stage1)
-    print(f"\n--- Stage 1: Freeze backbone & Warmup head (lr={args.lr_stage1}, {stage1_epochs} epochs) ---")
+    stage1_epochs = min(5, max(1, args.epochs // 5))
+    optimizer1 = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr_stage1, weight_decay=weight_decay)
+    print(f"\n--- Stage 1: Freeze backbone & Warmup head (lr={lr_stage1}, {stage1_epochs} epochs) ---")
 
     h1 = {'accuracy': [], 'loss': [], 'val_accuracy': [], 'val_loss': []}
     for epoch in range(1, stage1_epochs + 1):
@@ -416,7 +345,7 @@ def main():
         print(f"  [stage1] Epoch {epoch}/{stage1_epochs} summary ({perf_counter()-t0:.1f}s) | Train Acc: {train_acc:.4f} Loss: {train_loss:.4f} | Val Acc: {val_acc:.4f} Loss: {val_loss:.4f}\n")
         sys.stdout.flush()
 
-    # ── Stage 2: Deep Fine-Tuning ──
+    # ── Stage 2: Deep Fine-Tuning with Early Stopping & AdamW ──
     if has_cuda:
         torch.cuda.empty_cache()
 
@@ -438,12 +367,14 @@ def main():
             param.requires_grad = True
 
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    optimizer2 = optim.Adam([p for p in model.parameters() if p.requires_grad], lr=args.lr_stage2)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer2, mode='min', factor=0.3, patience=2)
+    optimizer2 = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr_stage2, weight_decay=weight_decay)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer2, mode='min', factor=0.3, patience=2, min_lr=1e-7)
     best_val_acc = 0.0
     checkpoint_path = model_dir / 'best_model.pth'
+    patience_counter = 0
+    early_stopping_patience = args.patience
 
-    print(f"\n--- Stage 2: Deep Fine-Tuning with {hw['precision_name']} (lr={args.lr_stage2}, {args.epochs} epochs, {trainable_params:,} trainable params) ---")
+    print(f"\n--- Stage 2: Deep Fine-Tuning with {hw['precision_name']} (lr={lr_stage2}, {args.epochs} epochs, {trainable_params:,} trainable params) ---")
     h2 = {'accuracy': [], 'loss': [], 'val_accuracy': [], 'val_loss': []}
     for epoch in range(1, args.epochs + 1):
         model.train()
@@ -499,8 +430,11 @@ def main():
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
+            patience_counter = 0
             save_obj = model.module.state_dict() if hasattr(model, 'module') else model.state_dict()
             torch.save(save_obj, checkpoint_path)
+        else:
+            patience_counter += 1
 
         h2['accuracy'].append(train_acc)
         h2['loss'].append(train_loss)
@@ -508,6 +442,10 @@ def main():
         h2['val_loss'].append(val_loss)
         print(f"  [stage2] Epoch {epoch}/{args.epochs} summary ({perf_counter()-t0:.1f}s) | Train Acc: {train_acc:.4f} Loss: {train_loss:.4f} | Val Acc: {val_acc:.4f} Loss: {val_loss:.4f}\n")
         sys.stdout.flush()
+
+        if patience_counter >= early_stopping_patience:
+            print(f"\n[EarlyStopping] Validation accuracy did not improve for {early_stopping_patience} consecutive epochs. Restoring best weights from {checkpoint_path}.")
+            break
 
     if checkpoint_path.exists():
         raw_model = model.module if hasattr(model, 'module') else model

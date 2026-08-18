@@ -10,7 +10,6 @@ import shutil
 import glob
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 
 try:
     from dotenv import load_dotenv
@@ -302,65 +301,69 @@ def compute_class_weights(y_train) -> dict:
         return dict(zip(classes, weights))
 
 
-# ─── Shared Training Utilities ───────────────────────────────────────────────
+# ─── Shared Training Utilities (Lazy TF classes) ─────────────────────────────
 
 from time import perf_counter
 
 
-class FocalLoss(tf.keras.losses.Loss):
-    """Focal loss supporting both one-hot and integer targets."""
-    def __init__(self, gamma=2.0, name='focal_loss', **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.gamma = gamma
+def get_focal_loss_class():
+    import tensorflow as tf
+    class FocalLoss(tf.keras.losses.Loss):
+        """Focal loss supporting both one-hot and integer targets."""
+        def __init__(self, gamma=2.0, name='focal_loss', **kwargs):
+            super().__init__(name=name, **kwargs)
+            self.gamma = gamma
 
-    def call(self, y_true, y_pred):
-        epsilon = tf.keras.backend.epsilon()
-        y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
-        if len(y_true.shape) == len(y_pred.shape):
-            # Categorical / one-hot
-            ce = -y_true * tf.math.log(y_pred)
-            modulating = tf.pow(1.0 - y_pred, self.gamma)
-            return tf.reduce_mean(modulating * ce)
-        else:
-            # Sparse / integer targets
-            y_true_int = tf.cast(y_true, tf.int32)
-            pt = tf.gather(y_pred, y_true_int, batch_dims=1)
-            ce = -tf.math.log(pt)
-            modulating = tf.pow(1.0 - pt, self.gamma)
-            return tf.reduce_mean(modulating * ce)
+        def call(self, y_true, y_pred):
+            epsilon = tf.keras.backend.epsilon()
+            y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
+            if len(y_true.shape) == len(y_pred.shape):
+                ce = -y_true * tf.math.log(y_pred)
+                modulating = tf.pow(1.0 - y_pred, self.gamma)
+                return tf.reduce_mean(modulating * ce)
+            else:
+                y_true_int = tf.cast(y_true, tf.int32)
+                pt = tf.gather(y_pred, y_true_int, batch_dims=1)
+                ce = -tf.math.log(pt)
+                modulating = tf.pow(1.0 - pt, self.gamma)
+                return tf.reduce_mean(modulating * ce)
 
-    def get_config(self):
-        config = super().get_config()
-        config.update({'gamma': self.gamma})
-        return config
+        def get_config(self):
+            config = super().get_config()
+            config.update({'gamma': self.gamma})
+            return config
+    return FocalLoss
 
 
-class EpochTimingCallback(tf.keras.callbacks.Callback):
-    """Callback to print elapsed time and metrics cleanly after each epoch."""
-    def __init__(self, stage_name='train'):
-        super().__init__()
-        self.stage_name = stage_name
-        self.epoch_start = None
-        self.stage_start = None
+def get_epoch_timing_callback_class():
+    import tensorflow as tf
+    class EpochTimingCallback(tf.keras.callbacks.Callback):
+        """Callback to print elapsed time and metrics cleanly after each epoch."""
+        def __init__(self, stage_name='train'):
+            super().__init__()
+            self.stage_name = stage_name
+            self.epoch_start = None
+            self.stage_start = None
 
-    def on_train_begin(self, logs=None):
-        self.stage_start = perf_counter()
-        print(f"  [{self.stage_name}] training started")
+        def on_train_begin(self, logs=None):
+            self.stage_start = perf_counter()
+            print(f"  [{self.stage_name}] training started")
 
-    def on_epoch_begin(self, epoch, logs=None):
-        self.epoch_start = perf_counter()
+        def on_epoch_begin(self, epoch, logs=None):
+            self.epoch_start = perf_counter()
 
-    def on_epoch_end(self, epoch, logs=None):
-        elapsed = perf_counter() - self.epoch_start if self.epoch_start is not None else 0.0
-        metrics = ' | '.join(
-            f"{k}={v:.4f}" for k, v in (logs or {}).items() if isinstance(v, (int, float, np.floating, np.integer))
-        )
-        epoch_total = self.params.get('epochs', epoch + 1)
-        suffix = f" | {metrics}" if metrics else ""
-        print(f"  [{self.stage_name}] epoch {epoch + 1}/{epoch_total} took {elapsed:.1f}s{suffix}")
+        def on_epoch_end(self, epoch, logs=None):
+            elapsed = perf_counter() - self.epoch_start if self.epoch_start is not None else 0.0
+            metrics = ' | '.join(
+                f"{k}={v:.4f}" for k, v in (logs or {}).items() if isinstance(v, (int, float, np.floating, np.integer))
+            )
+            epoch_total = self.params.get('epochs', epoch + 1)
+            suffix = f" | {metrics}" if metrics else ""
+            print(f"  [{self.stage_name}] epoch {epoch + 1}/{epoch_total} took {elapsed:.1f}s{suffix}")
 
-    def on_train_end(self, logs=None):
-        if self.stage_start is not None:
-            total_elapsed = perf_counter() - self.stage_start
-            print(f"  [{self.stage_name}] training finished in {total_elapsed:.1f}s")
+        def on_train_end(self, logs=None):
+            if self.stage_start is not None:
+                total_elapsed = perf_counter() - self.stage_start
+                print(f"  [{self.stage_name}] training finished in {total_elapsed:.1f}s")
+    return EpochTimingCallback
 

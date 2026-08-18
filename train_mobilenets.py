@@ -23,7 +23,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 from dataset import (
     NUM_CLASSES, CLASS_NAMES, HAM10000_CLASSES, PAD_UFES20_LABEL_MAP,
     prepare_dataset, prepare_dataset_with_external_validation,
-    get_data_generators, compute_class_weights, FocalLoss, EpochTimingCallback
+    compute_class_weights
 )
 from visualize import (
     plot_training_curves, plot_confusion_matrices,
