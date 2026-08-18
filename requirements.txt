@@ -1,5 +1,11 @@
-tensorflow[and-cuda]
-kagglehub
-matplotlib
+torch
+torchvision
+timm
 pandas
 numpy
+matplotlib
+seaborn
+scikit-learn
+pillow
+tabulate
+kagglehub
