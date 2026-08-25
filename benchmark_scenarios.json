@@ -1,0 +1,56 @@
+{
+  "scenarios": {
+    "standard": {
+      "name": "Standard (20 Epochs Production)",
+      "description": "20 Epochs, Patience 4, efficient convergence check balancing training throughput and high accuracy.",
+      "priority": 1,
+      "optional": false,
+      "models": {
+        "v1": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
+        "v2": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
+        "v3": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
+        "v4": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 4, "seed": 42},
+        "v5": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 4, "seed": 42}
+      }
+    },
+    "medium": {
+      "name": "Medium (Balanced Research Budget)",
+      "description": "30 Epochs, Patience 5, optimal compute-to-accuracy ratio for standard evaluation.",
+      "priority": 2,
+      "optional": false,
+      "models": {
+        "v1": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
+        "v2": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
+        "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
+        "v4": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 5, "seed": 42},
+        "v5": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 5, "seed": 42}
+      }
+    },
+    "low": {
+      "name": "Low (Fast Exploration)",
+      "description": "15 Epochs, Patience 3, rapid baseline profiling for lightweight execution.",
+      "priority": 3,
+      "optional": false,
+      "models": {
+        "v1": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
+        "v2": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
+        "v3": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
+        "v4": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 3, "seed": 42},
+        "v5": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 3, "seed": 42}
+      }
+    },
+    "maximum": {
+      "name": "Maximum (Peak Performance - Optional)",
+      "description": "50 Epochs, Patience 8, deep fine-tuning for SOTA convergence (optional, excluded from default batch runs).",
+      "priority": 4,
+      "optional": true,
+      "models": {
+        "v1": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
+        "v2": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
+        "v3": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
+        "v4": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 8, "seed": 42},
+        "v5": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 8, "seed": 42}
+      }
+    }
+  }
+}

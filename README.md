@@ -1,167 +1,168 @@
-# Skin Lesion Classification: MobileNet Benchmark & IncepX Ensemble
+# Skin Lesion Classification: MobileNet Generations (V1 – V5) Benchmark & Interpretability Suite
 
-Deep learning framework for skin lesion classification comparing lightweight architectures (**MobileNet V1, V2, V3Small, V3Large, V4Conv, V4ConvL, and V5**) with official pre-trained weights against an **InceptionV3 + Xception (IncepX)** ensemble on dermoscopic and clinical datasets.
+[![PyTorch](https://img.shields.io/badge/PyTorch-2.6%20%7C%20CUDA%2013-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![timm](https://img.shields.io/badge/timm-ImageNet%20%26%20Gemma-34D058)](https://github.com/huggingface/pytorch-image-models)
+[![Hardware](https://img.shields.io/badge/Hardware-NVIDIA%20Blackwell%20%7C%20RTX%205070%20%7C%20BF16-76B900?logo=nvidia&logoColor=white)](https://www.nvidia.com)
+[![Validation](https://img.shields.io/badge/Validation-HAM10000%20%2B%20PAD--UFES--20-007ACC)](https://data.mendeley.com/datasets/zr7vgbcyr2/1)
 
----
-
-## 📌 Project Overview
-
-- **Primary Dataset (Training)**: [HAM10000](https://www.kaggle.com/datasets/kmader/skin-cancer-mnist-ham10000) (10,015 dermoscopy images across 7 diagnostic categories).
-- **External Validation**: [PAD-UFES-20](https://data.mendeley.com/datasets/zr7vgbcyr2/1) (clinical smartphone images collected in Brazil to evaluate out-of-domain generalization).
-- **Diagnostic Classes**:
-  1. `akiec` - Actinic Keratoses / Intraepithelial Carcinoma
-  2. `bcc` - Basal Cell Carcinoma
-  3. `bkl` - Benign Keratosis-like Lesions
-  4. `df` - Dermatofibroma
-  5. `mel` - Melanoma
-  6. `nv` - Melanocytic Nevi
-  7. `vasc` - Vascular Lesions
+Comprehensive deep learning benchmark framework comparing lightweight convolutional and foundation vision architectures across five generations of MobileNet (**MobileNet V1, V2, V3 Small, V3 Large, V4 Conv-Medium, V4 Conv-Large, and V5 300M**) on dermoscopic and clinical smartphone skin lesions.
 
 ---
 
-## 🏗️ Architecture & Modules
+## 📌 Project Overview & Research Scope
+
+- **Primary In-Domain Training Dataset**: [HAM10000](https://www.kaggle.com/datasets/kmader/skin-cancer-mnist-ham10000) (10,015 dermoscopy images across 7 diagnostic categories).
+- **Out-of-Domain (OOD) Validation Dataset**: [PAD-UFES-20](https://data.mendeley.com/datasets/zr7vgbcyr2/1) (2,298 unconstrained clinical smartphone photos collected from 1,373 Brazilian patients in Espírito Santo to evaluate teledermatology domain transfer and dataset shift).
+
+### Cross-Dataset Taxonomy Harmonization:
+
+| Diagnostic Class | HAM10000 (Dermoscopy) | PAD-UFES-20 (Smartphone) | Taxonomy Alignment & Mapping |
+| :--- | :---: | :---: | :--- |
+| **Melanoma (MEL)** | 1,113 (11.1%) | 52 (2.3%) | **Direct 1:1 Match** (Primary Target for Triage) |
+| **Basal Cell Carcinoma (BCC)** | 514 (5.1%) | 845 (36.8%) | **Direct 1:1 Match** |
+| **Nevus (NV / NEV)** | 6,705 (66.9%) | 244 (10.6%) | **Direct 1:1 Match** |
+| **Seborrheic Keratosis (BKL / SEK)** | 1,099 (11.0%) | 257 (11.2%) | **Direct 1:1 Match** |
+| **Actinic Keratosis / SCC (AKIEC)** | 327 (3.3%) | 730 (ACK) + 192 (SCC) | **Harmonized**: `ACK` + `SCC` $\rightarrow$ `AKIEC` |
+| **Dermatofibroma (DF)** | 115 (1.1%) | *0 (0.0%)* | Absent in PAD-UFES-20 |
+| **Vascular Lesions (VASC)** | 142 (1.4%) | *0 (0.0%)* | Absent in PAD-UFES-20 |
+
+---
+
+## 🔬 Dual-Perspective Evaluation Framework (Solution 1)
+
+To reconcile 7-class deep representation learning with clinical screening and triage objectives, the framework evaluates models across two complementary perspectives:
 
 ```text
-├── dataset.py            # Centralized dataset pipeline, caching, loaders, Focal Loss & callbacks
-├── train_mobilenets.py   # Unified MobileNet V1, V2, V3Small, V3Large, V4Conv, V4ConvL, V5 suite
-├── train_timm_models.py  # PyTorch & timm trainer for Hugging Face pretrained V4 and V5 models
-├── train_incepx.py       # InceptionV3 + Xception dual-backbone feature fusion ensemble
-├── visualize.py          # Dual confusion matrix, per-class bar charts, Grad-CAM heatmaps & curves
-├── requirements.txt      # Python dependencies
-├── data_cache/           # Local cache for raw datasets (HAM10000, PAD-UFES-20)
-└── tests/                # Smoke tests and loss validation scripts
-    └── test_focal.py     # Focal Loss & model serialization tests
+               ┌──────────────────────────────────────────────┐
+               │    HAM10000 (10,015 Dermoscopic Images)      │
+               └──────────────────────┬───────────────────────┘
+                                      │
+                                      ▼
+               ┌──────────────────────────────────────────────┐
+               │  7-Class Feature Representation Pretraining  │
+               │  (Focal Loss γ=2.0 + AdamW + BFloat16 AMP)   │
+               └──────────────────────┬───────────────────────┘
+                                      │
+                ┌─────────────────────┴─────────────────────┐
+                │                                           │
+                ▼                                           ▼
+┌───────────────────────────────┐           ┌───────────────────────────────┐
+│   Perspective 1: Fine-Grained │           │    Perspective 2: Clinical    │
+│    Representation Learning    │           │    Melanoma Triage Mode       │
+├───────────────────────────────┤           ├───────────────────────────────┤
+│ • 7-Class HAM10000 In-Domain  │           │ • P(MEL) = p_mel              │
+│ • 5-Class Harmonized OOD      │           │ • P(Non-MEL) = 1 - p_mel      │
+│ • Macro OvR AUC-ROC           │           │ • Binary Melanoma AUC-ROC     │
+│ • Per-Class Recall (MEL, BCC) │           │ • Sensitivity at Clinical Th. │
+└───────────────────────────────┘           └───────────────────────────────┘
+```
+
+1. **Perspective 1 — Fine-Grained Representation Learning**:
+   - Trains backbones on all 7 HAM10000 classes to force convolutional and attention filters to learn nuanced morphological differences (pigment networks, vascular patterns, keratin structures).
+   - Evaluates **Macro One-vs-Rest (OvR) AUC-ROC** and **Harmonized 5-Class Accuracy** on PAD-UFES-20 (bypassing penalties from absent classes `df`/`vasc`).
+
+2. **Perspective 2 — Clinical Melanoma Triage Mode**:
+   - Mathematically projects the 7-class probability simplex into binary triage space:
+     $$\hat{P}(\text{Melanoma}) = p_{\text{mel}}, \quad \hat{P}(\text{Non-Melanoma}) = 1 - p_{\text{mel}}$$
+   - Computes **Binary Melanoma AUC-ROC (`mel_auc_roc`)**, **Melanoma Sensitivity (Recall)**, and **Specificity** on both dermoscopy and clinical smartphone photos.
+
+---
+
+## 🏗️ Repository Architecture
+
+```text
+├── dataset.py                  # Dataset loaders, stratified splits, oversampling & PAD-UFES taxonomy mapping
+├── train_timm_models.py        # Core PyTorch + timm Dual-Domain trainer with BFloat16 AMP, AUC-ROC & Grad-CAM
+├── train_mobilenets.py         # CLI dispatcher for single-model or full-suite training runs
+├── run_scenarios.py            # Automated scenario runner (Maximum -> Medium -> Low) with date-versioned isolation
+├── run_grid_search.py          # Multi-hyperparameter grid search orchestrator with auto-resume
+├── visualize.py                # ROC curves, dual confusion matrices, Grad-CAM heatmaps & domain comparison charts
+├── benchmark_scenarios.json    # Standardized hyperparameter configurations per scenario tier
+├── infrastructure.md           # Mathematical and hardware architecture documentation
+├── research_logs/              # Daily experimental logs and methodology documentation
+│   ├── 2026-08-18_benchmark_summary.md
+│   └── 2026-08-24_dual_perspective_auc_roc_and_taxonomy_harmonization.md
+├── experiments/                # Date & session-isolated experiment runs
+│   ├── GLOBAL_ARCHIVE_INDEX.md # Master catalog of all dated runs
+│   └── 20_08_2026/             # Daily benchmark folder (leaderboard, checkpoints, curves, heatmaps)
+└── data_cache/                 # Local cache for raw datasets (HAM10000, PAD-UFES-20)
 ```
 
 ---
 
-## 📦 Supported Models & Pretrained Weights
+## 📦 Supported Model Architectures (1 Flagship per Generation)
 
-| CLI Model Flag | Architecture | Input Resolution | Pretrained Source / Checkpoint |
-|---|---|---|---|
-| `--model v1` | MobileNet V1 | 224 × 224 | **ImageNet-1k** (`timm/mobilenetv1_100`) |
-| `--model v2` | MobileNet V2 | 224 × 224 | **ImageNet-1k** (`timm/mobilenetv2_100`) |
-| `--model v3small` | MobileNet V3 Small | 224 × 224 | **ImageNet-1k** (`timm/mobilenetv3_small_100`) |
-| `--model v3large` | MobileNet V3 Large | 224 × 224 | **ImageNet-1k** (`timm/mobilenetv3_large_100`) |
-| `--model v4conv` | MobileNet V4 Conv-Medium | 256 × 256 | **ImageNet-1k** (`timm/mobilenetv4_conv_medium.e500_r256_in1k`) |
-| `--model v4convl` | MobileNet V4 Conv-Large | 384 × 384 | **ImageNet-1k** (`timm/mobilenetv4_conv_large.e500_r384_in1k`) |
-| `--model v5` | MobileNet V5 (300M) | 256 × 256 | **Google Gemma3n Vision Backbone** (`timm/mobilenetv5_300m.gemma3n`) |
+| CLI Model Flag | Architecture | Input Res. | Backbone / Pretrained Checkpoint | Primary Architectural Innovation |
+|---|---|:---:|---|---|
+| `--model v1` | **MobileNet V1** | 224 × 224 | ImageNet-1k (`mobilenetv1_100`) | Depthwise Separable Convolutions baseline |
+| `--model v2` | **MobileNet V2** | 224 × 224 | ImageNet-1k (`mobilenetv2_100`) | Inverted Residuals & Linear Bottlenecks |
+| `--model v3` | **MobileNet V3** | 224 × 224 | ImageNet-1k (`mobilenetv3_large_100`) | Hardware-Aware NAS + Squeeze-and-Excitation |
+| `--model v4` | **MobileNet V4** | 256 × 256 | ImageNet-1k (`mobilenetv4_conv_medium`) | Universal Inverted Bottleneck (UIB) |
+| `--model v5` | **MobileNet V5** | 256 × 256 | Google Gemma3n (`mobilenetv5_300m.gemma3n`) | Multi-Scale Feature Aggregation (MSFA) Foundation Backbone |
 
 ---
 
-### Key Technical Strategies
-1. **Stratified Splitting & Training-Only Oversampling**: Prevents data leakage by splitting the raw dataset first, then oversampling only the training fold.
-2. **Focal Loss ($\gamma=2.0$) & Class Weights**: Mitigates heavy class imbalance (e.g., thousands of `nv` vs. tens of `df`/`vasc`).
-3. **Two-Stage Transfer Learning**:
-   - **Stage 1 (Head Warmup)**: Frozen backbone, trains classification head ($lr \approx 10^{-3}$).
-   - **Stage 2 (Fine-Tuning)**: Unfreezes convolutional layers with lower learning rate ($lr \approx 10^{-5}$) while keeping BatchNorm layers frozen for stable batch statistics.
-
----
-
-## 🚀 Environment Setup
+## 🚀 Quickstart & Setup
 
 ### 1. Create Virtual Environment & Install Dependencies
 
 ```bash
-# Create and activate virtual environment
+# Create and activate environment
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Upgrade pip and install dependencies
+# Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 2. Verify GPU Acceleration
+### 2. Run Pre-Configured Benchmark Scenarios (`Maximum -> Medium -> Low`)
+
+Run the complete multi-scenario suite with automatic resume and dual-domain AUC-ROC tracking:
 
 ```bash
-.venv/bin/python -c "import tensorflow as tf; print('GPUs Available:', tf.config.list_physical_devices('GPU'))"
+# Run all scenarios with unbuffered output (-u) for real-time logging
+nohup .venv/bin/python -u run_scenarios.py --scenario all > scenarios_benchmark.log 2>&1 &
+
+# Monitor the logs in real-time
+tail -f scenarios_benchmark.log
+```
+
+Or run a specific tier / subset of models:
+
+```bash
+# Run only Medium scenario on V1, V4, and V5
+.venv/bin/python run_scenarios.py --scenario medium --models v1 v4 v5
 ```
 
 ---
 
-## 🏋️ Training & Usage
+## 🏋️ Single Model Training
 
-### 1. Train MobileNet V1 – V5 (`train_mobilenets.py`)
-
-Run any MobileNet variant through the standardized dual-stage training & evaluation pipeline:
+Train any individual model directly with custom hyperparameters:
 
 ```bash
-# MobileNet V1 (ImageNet pretrained)
-.venv/bin/python train_mobilenets.py --model v1 --epochs 50 --batch-size 32
+# MobileNet V1
+.venv/bin/python train_timm_models.py --model v1 --epochs 30 --batch-size 32
 
-# MobileNet V2 (ImageNet pretrained)
-.venv/bin/python train_mobilenets.py --model v2 --epochs 50 --batch-size 32
+# MobileNet V4 Conv-Medium
+.venv/bin/python train_timm_models.py --model v4 --epochs 30 --batch-size 32
 
-# MobileNet V3 (Small or Large)
-.venv/bin/python train_mobilenets.py --model v3small --epochs 50
-.venv/bin/python train_mobilenets.py --model v3large --epochs 50
-
-# MobileNet V4 (Hugging Face / timm ImageNet pretrained)
-.venv/bin/python train_mobilenets.py --model v4conv --epochs 50
-.venv/bin/python train_mobilenets.py --model v4convl --epochs 50
-
-# MobileNet V5 (Hugging Face / timm Google Gemma3n pretrained)
-.venv/bin/python train_mobilenets.py --model v5 --epochs 50
-
-# Train ALL MobileNet variants (V1 through V5) and generate multi-model comparison charts
-.venv/bin/python train_mobilenets.py --model all --epochs 50
-```
-
-### 2. Train IncepX Ensemble (`train_incepx.py`)
-
-```bash
-.venv/bin/python train_incepx.py --epochs 50 --batch-size 32
+# MobileNet V5 (300M Gemma3n)
+.venv/bin/python train_timm_models.py --model v5 --epochs 30 --batch-size 32
 ```
 
 ---
 
-## 🧪 External Validation on PAD-UFES-20
+## 📊 Visual & Analytical Artifacts Generated
 
-To evaluate clinical generalization by training on HAM10000 and validating on PAD-UFES-20:
+Each benchmark execution automatically generates comprehensive clinical evaluation artifacts:
 
-```bash
-# MobileNet V1 on PAD-UFES-20
-.venv/bin/python train_mobilenets.py --model v1 --val-dataset pad-ufes-20 --epochs 50 --batch-size 32
-
-# MobileNet V2 on PAD-UFES-20
-.venv/bin/python train_mobilenets.py --model v2 --val-dataset pad-ufes-20 --epochs 50 --batch-size 32
-
-# MobileNet V3 (Small or Large) on PAD-UFES-20
-.venv/bin/python train_mobilenets.py --model v3small --val-dataset pad-ufes-20 --epochs 50
-.venv/bin/python train_mobilenets.py --model v3large --val-dataset pad-ufes-20 --epochs 50
-
-# MobileNet V4 (Conv Medium or Conv Large) on PAD-UFES-20
-.venv/bin/python train_mobilenets.py --model v4conv --val-dataset pad-ufes-20 --epochs 50
-.venv/bin/python train_mobilenets.py --model v4convl --val-dataset pad-ufes-20 --epochs 50
-
-# MobileNet V5 (300M Gemma3n) on PAD-UFES-20
-.venv/bin/python train_mobilenets.py --model v5 --val-dataset pad-ufes-20 --epochs 50
-
-# Run All Models on PAD-UFES-20 and generate comparison charts
-.venv/bin/python train_mobilenets.py --model all --val-dataset pad-ufes-20 --epochs 50
-```
-
-> [!IMPORTANT]
-> **PAD-UFES-20 Setup**:
-> Download the dataset archive (`pad-ufes-20.zip`) from **Mendeley Data**:
-> - **Mendeley Data Link**: [https://data.mendeley.com/datasets/zr7vgbcyr2/1](https://data.mendeley.com/datasets/zr7vgbcyr2/1)
-> 
-> Extract `metadata.csv` and image subfolders (`imgs_part_1`, `imgs_part_2`, `imgs_part_3`) into:
-> ```bash
-> data_cache/pad_ufes_20_raw/
-> ```
-
----
-
-## 📊 Outputs & Visualizations
-
-Training automatically generates rich visualization artifacts in the designated output folder (e.g., `./mobilenet_outputs/<model_name>/`):
-
-- **`confusion_matrix.png`**: Dual side-by-side matrices (raw sample counts + normalized sensitivity percentages).
-- **`per_class_metrics.png`**: Per-class Precision, Recall, and F1-score bar chart with exact value labels.
-- **`training_curves.png`**: Multi-stage loss and accuracy curves with clear epoch markers.
-- **`gradcam_heatmaps.png`**: Grad-CAM CNN attention heatmaps overlaid on sample lesion images.
-- **`classification_report.json`**: Precision, recall, and F1-scores per diagnostic class.
-- **`results.json`**: Key evaluation metrics (accuracy, weighted F1, macro F1, parameter counts).
-- **`benchmark_comparison.png`**: Multi-model comparison bar chart generated when running `--model all`.
+- **`roc_curves_dual_domain.png`**: Side-by-side comparative ROC analysis contrasting in-domain (HAM10000 dermoscopy) against out-of-domain (PAD-UFES-20 smartphone) discrimination.
+- **`roc_curves.png`**: Multi-class One-vs-Rest ROC curves with per-class AUC-ROC and highlighted Melanoma triage curve.
+- **`domain_comparison.png`**: Side-by-side comparative bar chart tracking Accuracy, F1, Melanoma Recall, Melanoma AUC-ROC, and Macro AUC.
+- **`confusion_matrix.png`**: Dual matrices showing raw sample counts and row-normalized sensitivity percentages.
+- **`per_class_metrics.png`**: Diagnostic Precision, Recall, and F1-score breakdown per class.
+- **`gradcam_heatmaps.png`**: 3-column CNN attention gallery (Original Image, Heatmap, Superimposed Overlay).
+- **`training_curves.png`**: Multi-stage loss and accuracy trajectory over training epochs.
+- **`results.json` & `classification_report.json`**: Exact numerical scores including `mel_auc_roc`, `macro_auc_roc`, `harmonized_5class_acc`, and per-class sensitivities.

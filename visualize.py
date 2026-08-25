@@ -18,7 +18,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from PIL import Image
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc, roc_auc_score
 
 import torch
 import torch.nn as nn
@@ -178,67 +178,131 @@ def plot_per_class_metrics(
     return fig
 
 
-# ─── 4. PyTorch Grad-CAM (CNN Heatmaps) ───────────────────────────────────────
+# ─── 4. PyTorch Grad-CAM & Grad-CAM++ Engine ─────────────────────────────────
 
 class PyTorchGradCAM:
-    """Computes Grad-CAM activation heatmaps for any PyTorch/timm CNN backbone."""
+    """
+    Robust Grad-CAM / Grad-CAM++ activation mapping engine for PyTorch/timm CNNs.
+    Supports MobileNet V1, V2, V3, V4, and V5 with automatic layer selection,
+    gradient-flow guarantee, and multi-layer fallback to prevent blank heatmaps.
+    Uses tensor hooks on cloned feature maps to prevent in-place activation conflicts.
+    """
     def __init__(self, model: nn.Module, target_layer: Optional[nn.Module] = None):
         self.model = model
         self.target_layer = target_layer
         self.activations = None
         self.gradients = None
-        self.hook_handles = []
+        self.hook_handle = None
 
         raw_model = model.module if hasattr(model, 'module') else model
 
-        if self.target_layer is None:
-            # Find the deepest convolutional layer in the architecture
-            for name, module in reversed(list(raw_model.named_modules())):
-                if isinstance(module, nn.Conv2d):
-                    self.target_layer = module
+        # Collect candidate conv layers from deepest to shallowest
+        candidate_layers = []
+        for name, module in raw_model.named_modules():
+            if isinstance(module, nn.Conv2d):
+                if not any(k in name.lower() for k in ('classifier', 'fc', 'linear', 'head.fc', 'head.flatten', 'conv_head', 'head_conv')):
+                    candidate_layers.append((name, module))
+
+        if self.target_layer is None and candidate_layers:
+            # Check for preferred named spatial feature layers inside blocks
+            preferred_patterns = ['blocks', 'layer', 'features', 'conv_pw', 'msfa']
+            selected = None
+            for pat in preferred_patterns:
+                matches = [mod for name, mod in candidate_layers if pat in name.lower()]
+                if matches:
+                    selected = matches[-1]  # deepest spatial block module
                     break
+            if selected is None:
+                selected = candidate_layers[-1][1]
+            self.target_layer = selected
 
         if self.target_layer is not None:
-            self.hook_handles.append(self.target_layer.register_forward_hook(self._forward_hook))
-            self.hook_handles.append(self.target_layer.register_full_backward_hook(self._backward_hook))
+            self.hook_handle = self.target_layer.register_forward_hook(self._forward_hook)
 
     def _forward_hook(self, module, inp, out):
-        self.activations = out.detach()
+        # Clone activations to decouple from subsequent in-place activations (e.g. hardswish_)
+        self.activations = out.clone()
+        if out.requires_grad:
+            out.register_hook(self._tensor_backward_hook)
 
-    def _backward_hook(self, module, grad_in, grad_out):
-        self.gradients = grad_out[0].detach()
+    def _tensor_backward_hook(self, grad):
+        self.gradients = grad.clone()
 
     def __call__(self, x: torch.Tensor, target_class: Optional[int] = None) -> tuple:
-        self.model.eval()
-        self.model.zero_grad()
-        out = self.model(x)
+        # Ensure all model parameters require gradients during backward pass
+        orig_states = [p.requires_grad for p in self.model.parameters()]
+        for p in self.model.parameters():
+            p.requires_grad = True
 
-        if target_class is None:
-            target_class = out.argmax(dim=1).item()
+        try:
+            with torch.enable_grad():
+                self.model.eval()
+                self.model.zero_grad()
+                x = x.clone().detach().requires_grad_(True)
+                out = self.model(x)
 
-        score = out[0, target_class]
-        score.backward()
+                if target_class is None:
+                    target_class = int(out.argmax(dim=1).item())
 
-        if self.activations is None or self.gradients is None:
-            return np.zeros((x.shape[2], x.shape[3])), out.softmax(dim=1)[0].detach().cpu().numpy()
+                score = out[0, target_class]
+                score.backward(retain_graph=True)
 
-        # Global average pool gradients over spatial dimensions
-        weights = torch.mean(self.gradients, dim=(2, 3), keepdim=True)
-        cam = torch.relu(torch.sum(weights * self.activations, dim=1, keepdim=True))
+                if self.activations is None or self.gradients is None:
+                    heatmap_np = np.zeros((x.shape[2], x.shape[3]), dtype=np.float32)
+                else:
+                    acts = self.activations.float()
+                    grads = self.gradients.float()
 
-        # Normalize
-        cam = cam - cam.min()
-        if cam.max() > 0:
-            cam = cam / cam.max()
+                    # Grad-CAM++ calculation for enhanced localized sensitivity
+                    grads_power_2 = grads.pow(2)
+                    grads_power_3 = grads.pow(3)
+                    sum_acts = acts.sum(dim=(2, 3), keepdim=True)
+                    eps = 1e-7
 
-        cam = nn.functional.interpolate(cam, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
-        heatmap_np = cam[0, 0].cpu().numpy()
-        probs_np = out.softmax(dim=1)[0].detach().cpu().numpy()
+                    # Alpha weighting coefficients (Grad-CAM++)
+                    aij = grads_power_2 / (2.0 * grads_power_2 + sum_acts * grads_power_3 + eps)
+                    aij = torch.where(grads != 0, aij, torch.zeros_like(aij))
+                    weights = torch.sum(aij * torch.relu(grads), dim=(2, 3), keepdim=True)
+
+                    # Weighted combination
+                    cam = torch.sum(weights * acts, dim=1, keepdim=True)
+                    cam = torch.relu(cam)
+
+                    # Fallback to standard Grad-CAM if Grad-CAM++ produces near-zero response
+                    if cam.max() < eps:
+                        std_weights = torch.mean(grads, dim=(2, 3), keepdim=True)
+                        cam = torch.relu(torch.sum(std_weights * acts, dim=1, keepdim=True))
+
+                    # Fallback to activation magnitude if gradients are ultra-sparse
+                    if cam.max() < eps:
+                        cam = torch.mean(acts.abs(), dim=1, keepdim=True)
+
+                    # Min-Max Normalization to [0, 1]
+                    cam = cam - cam.min()
+                    max_val = cam.max()
+                    if max_val > eps:
+                        cam = cam / max_val
+
+                    # Interpolate to input resolution
+                    cam = nn.functional.interpolate(cam, size=(x.shape[2], x.shape[3]), mode='bilinear', align_corners=False)
+                    heatmap_np = cam[0, 0].detach().cpu().numpy()
+
+                probs_np = out.softmax(dim=1)[0].detach().cpu().numpy()
+
+        finally:
+            # Restore original parameter requires_grad states
+            for p, state in zip(self.model.parameters(), orig_states):
+                p.requires_grad = state
+
         return heatmap_np, probs_np
 
     def remove_hooks(self):
-        for h in self.hook_handles:
-            h.remove()
+        if self.hook_handle is not None:
+            try:
+                self.hook_handle.remove()
+            except Exception:
+                pass
+            self.hook_handle = None
 
 
 def overlay_gradcam(original_img: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45, colormap: str = 'jet') -> np.ndarray:
@@ -405,3 +469,170 @@ def plot_benchmark_summary(
         plt.close(fig)
 
     return fig
+
+
+# ─── 6. In-Domain vs. Out-of-Domain Comparison ───────────────────────────────
+
+def plot_domain_comparison(
+    ham_results: Dict[str, Any],
+    pad_results: Dict[str, Any],
+    model_name: str = "Model",
+    output_path: Optional[Union[str, Path]] = None
+) -> plt.Figure:
+    """Generate a side-by-side comparative bar chart: In-Domain (HAM10000) vs Out-of-Domain (PAD-UFES-20)."""
+    metrics_keys = ['accuracy', 'weighted_avg_f1', 'mel_recall', 'mel_auc_roc', 'macro_auc_roc', 'bcc_recall', 'akiec_recall']
+    metric_labels = ['Accuracy', 'Weighted F1', 'Mel Recall', 'Mel AUC-ROC', 'Macro AUC', 'BCC Recall', 'AKIEC Recall']
+
+    ham_scores = [ham_results.get(k, 0.0) or 0.0 for k in metrics_keys]
+    pad_scores = [pad_results.get(k, 0.0) or 0.0 for k in metrics_keys]
+
+    x = np.arange(len(metrics_keys))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(15, 6))
+    fig.patch.set_facecolor('#fafafa')
+    ax.set_facecolor('#ffffff')
+
+    rects1 = ax.bar(x - width/2, ham_scores, width, label='In-Domain: HAM10000 (Dermoscopy)', color='#1f77b4', edgecolor='white')
+    rects2 = ax.bar(x + width/2, pad_scores, width, label='Out-of-Domain: PAD-UFES-20 (Smartphone)', color='#d62728', edgecolor='white')
+
+    ax.set_title(f"{model_name.upper()} — Clinical Domain Shift: HAM10000 (Dermoscopy) vs. PAD-UFES-20 (Smartphone)", fontsize=13, fontweight='bold', pad=12)
+    ax.set_ylabel('Diagnostic Score [0.0 - 1.0]', fontsize=11, labelpad=8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metric_labels, fontsize=10, fontweight='bold')
+    ax.set_ylim(0, 1.18)
+    ax.grid(axis='y', linestyle=':', alpha=0.7)
+    ax.legend(frameon=True, facecolor='white', framealpha=0.9, fontsize=10)
+
+    for rects in (rects1, rects2):
+        for rect in rects:
+            height = rect.get_height()
+            if height > 0.01:
+                ax.annotate(f'{height:.1%}',
+                            xy=(rect.get_x() + rect.get_width() / 2, height),
+                            xytext=(0, 3), textcoords="offset points",
+                            ha='center', va='bottom', fontsize=8, fontweight='bold')
+
+    plt.tight_layout()
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=250, bbox_inches='tight')
+        plt.close(fig)
+    return fig
+
+
+# ─── 7. ROC Curves & Multi-Class / Binary AUC-ROC ─────────────────────────────
+
+def plot_roc_curves(
+    y_true: np.ndarray,
+    y_probs: np.ndarray,
+    class_names: List[str],
+    output_path: Optional[Union[str, Path]] = None,
+    model_name: str = "Model"
+) -> plt.Figure:
+    """Plot multi-class One-vs-Rest ROC curves with high-contrast distinct curves and binary Melanoma triage curve."""
+    fig, ax = plt.subplots(figsize=(9, 8))
+    fig.patch.set_facecolor('#fafafa')
+    ax.set_facecolor('#ffffff')
+
+    colors = sns.color_palette("tab10", len(class_names))
+    present_classes = np.unique(y_true)
+    macro_aucs = []
+
+    # Plot per-class OvR ROC curves
+    for idx, name in enumerate(class_names):
+        if idx in present_classes:
+            y_bin = (y_true == idx).astype(int)
+            if len(np.unique(y_bin)) > 1:
+                fpr, tpr, _ = roc_curve(y_bin, y_probs[:, idx])
+                roc_auc = auc(fpr, tpr)
+                macro_aucs.append(roc_auc)
+                lw = 2.8 if name.lower() == 'mel' else 1.8
+                ls = '-' if name.lower() == 'mel' else '--'
+                label = f"{name.upper()} (AUC = {roc_auc:.3f})"
+                if name.lower() == 'mel':
+                    label += " 🔍 [Primary Target]"
+                ax.plot(fpr, tpr, color=colors[idx % len(colors)], lw=lw, linestyle=ls, label=label)
+
+    # Plot Macro Average
+    if macro_aucs:
+        mean_auc = float(np.mean(macro_aucs))
+        ax.plot([], [], ' ', label=f"Macro-Average AUC = {mean_auc:.3f}")
+
+    # Reference diagonal (random guessing)
+    ax.plot([0, 1], [0, 1], color='#888888', linestyle=':', lw=1.5, label='Random Chance (AUC = 0.500)')
+
+    ax.set_xlim([-0.02, 1.02])
+    ax.set_ylim([-0.02, 1.05])
+    ax.set_xlabel('False Positive Rate (1 - Specificity)', fontsize=11, fontweight='bold', labelpad=8)
+    ax.set_ylabel('True Positive Rate (Sensitivity / Recall)', fontsize=11, fontweight='bold', labelpad=8)
+    ax.set_title(f"{model_name.upper()} — Receiver Operating Characteristic (ROC) Curves", fontsize=12, fontweight='bold', pad=12)
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.legend(loc="lower right", frameon=True, facecolor='white', framealpha=0.95, fontsize=9.5)
+
+    plt.tight_layout()
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=250, bbox_inches='tight')
+        plt.close(fig)
+    return fig
+
+
+def plot_dual_roc_comparison(
+    ham_results: Dict[str, Any],
+    pad_results: Dict[str, Any],
+    class_names: List[str],
+    output_path: Optional[Union[str, Path]] = None,
+    model_name: str = "Model"
+) -> plt.Figure:
+    """Side-by-side ROC comparison between In-Domain (HAM10000) and Out-of-Domain (PAD-UFES-20)."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 7.5))
+    fig.patch.set_facecolor('#fafafa')
+
+    colors = sns.color_palette("tab10", len(class_names))
+
+    for ax, res, domain_title in [
+        (ax1, ham_results, "In-Domain: HAM10000 (Dermoscopy)"),
+        (ax2, pad_results, "Out-of-Domain: PAD-UFES-20 (Smartphone)")
+    ]:
+        ax.set_facecolor('#ffffff')
+        y_true = res.get('all_targets')
+        y_probs = res.get('all_probs')
+
+        if y_true is not None and y_probs is not None:
+            present_classes = np.unique(y_true)
+            macro_aucs = []
+            for idx, name in enumerate(class_names):
+                if idx in present_classes:
+                    y_bin = (y_true == idx).astype(int)
+                    if len(np.unique(y_bin)) > 1:
+                        fpr, tpr, _ = roc_curve(y_bin, y_probs[:, idx])
+                        roc_auc = auc(fpr, tpr)
+                        macro_aucs.append(roc_auc)
+                        lw = 2.8 if name.lower() == 'mel' else 1.8
+                        ls = '-' if name.lower() == 'mel' else '--'
+                        label = f"{name.upper()} (AUC = {roc_auc:.3f})"
+                        if name.lower() == 'mel':
+                            label += " 🔍 [Primary Target]"
+                        ax.plot(fpr, tpr, color=colors[idx % len(colors)], lw=lw, linestyle=ls, label=label)
+
+            if macro_aucs:
+                mean_auc = float(np.mean(macro_aucs))
+                ax.plot([], [], ' ', label=f"Macro-Average AUC = {mean_auc:.3f}")
+
+        ax.plot([0, 1], [0, 1], color='#888888', linestyle=':', lw=1.5, label='Random Chance (AUC = 0.500)')
+        ax.set_xlim([-0.02, 1.02])
+        ax.set_ylim([-0.02, 1.05])
+        ax.set_xlabel('False Positive Rate (1 - Specificity)', fontsize=11, fontweight='bold', labelpad=8)
+        ax.set_ylabel('True Positive Rate (Sensitivity / Recall)', fontsize=11, fontweight='bold', labelpad=8)
+        ax.set_title(f"{domain_title}\n{model_name.upper()} ROC Analysis", fontsize=11, fontweight='bold', pad=10)
+        ax.grid(True, linestyle=':', alpha=0.6)
+        ax.legend(loc="lower right", frameon=True, facecolor='white', framealpha=0.95, fontsize=9)
+
+    plt.tight_layout()
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=250, bbox_inches='tight')
+        plt.close(fig)
+    return fig
+
