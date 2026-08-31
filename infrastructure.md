@@ -277,9 +277,10 @@ Skin lesion classification models in clinical dermatological settings require mu
 ```text
 /home/lkm20/TCC/
 │
-├── train_mobilenets.py     # Unified CLI entrypoint for all MobileNet models (V1-V5)
-├── train_timm_models.py    # Hardware accelerator engine & PyTorch/timm training loop
-├── train_incepx.py         # Dual-backbone InceptionV3 + Xception ensemble runner
+├── main.py                 # Unified CLI entrypoint, dataset orchestrator & benchmark summary logger
+├── train_timm_models.py    # Core PyTorch + timm backbone engine, Focal Loss & Dual-Domain training loop
+├── run_scenarios.py        # Automated benchmark tier executor (Maximum, Medium, Low)
+├── run_grid_search.py      # Multi-hyperparameter grid search orchestrator
 ├── dataset.py              # Stratified partitioning, oversampling & data loaders
 ├── visualize.py            # Automated chart, confusion matrix & curve generation
 ├── requirements.txt        # Verified dependencies (torch, torchvision, timm, etc.)
@@ -291,10 +292,8 @@ Skin lesion classification models in clinical dermatological settings require mu
 └── mobilenet_outputs/      # Saved models, checkpoints, reports & plots
     ├── v1/                 # MobileNet V1 results & best_model.pth
     ├── v2/                 # MobileNet V2 results & best_model.pth
-    ├── v3small/            # MobileNet V3 Small results & best_model.pth
-    ├── v3large/            # MobileNet V3 Large results & best_model.pth
-    ├── v4conv/             # MobileNet V4 Medium results & best_model.pth
-    ├── v4convl/            # MobileNet V4 Large results & best_model.pth
+    ├── v3/                 # MobileNet V3 results & best_model.pth
+    ├── v4/                 # MobileNet V4 results & best_model.pth
     ├── v5/                 # MobileNet V5 results & best_model.pth
     └── benchmark_comparison.png  # Overall benchmark chart across all models
 ```
@@ -305,12 +304,12 @@ Skin lesion classification models in clinical dermatological settings require mu
 
 ```bash
 # Train individual model on clinical validation:
-.venv/bin/python train_mobilenets.py --model v1 --val-dataset pad-ufes-20 --epochs 50
-.venv/bin/python train_mobilenets.py --model v2 --val-dataset pad-ufes-20 --epochs 50
-.venv/bin/python train_mobilenets.py --model v3large --val-dataset pad-ufes-20 --epochs 50
-.venv/bin/python train_mobilenets.py --model v4conv --val-dataset pad-ufes-20 --epochs 50
-.venv/bin/python train_mobilenets.py --model v5 --val-dataset pad-ufes-20 --epochs 50
+.venv/bin/python train_timm_models.py --model v1 --val-dataset pad-ufes-20 --epochs 50
+.venv/bin/python train_timm_models.py --model v2 --val-dataset pad-ufes-20 --epochs 50
+.venv/bin/python train_timm_models.py --model v3 --val-dataset pad-ufes-20 --epochs 50
+.venv/bin/python train_timm_models.py --model v4 --val-dataset pad-ufes-20 --epochs 50
+.venv/bin/python train_timm_models.py --model v5 --val-dataset pad-ufes-20 --epochs 50
 
 # Run complete comparative benchmark:
-.venv/bin/python train_mobilenets.py --model all --val-dataset pad-ufes-20 --epochs 50
+.venv/bin/python train_timm_models.py --model all --val-dataset pad-ufes-20 --epochs 50
 ```

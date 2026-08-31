@@ -1,6 +1,6 @@
 """
 Dataset Preparation and Data Loading Pipelines for HAM10000 and PAD-UFES-20.
-Shared across all model training scripts (MobileNet V1-V4, MobileNetV5, Inception/Xception, etc.)
+Shared across all model training scripts (MobileNet V1, V2, V3, V4, and V5).
 """
 
 from pathlib import Path
@@ -19,7 +19,7 @@ except ImportError:
 
 import kagglehub
 from sklearn.model_selection import train_test_split
-from sklearn.utils import resample, class_weight as sk_class_weight
+from sklearn.utils import resample
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 NUM_CLASSES = 7
@@ -232,138 +232,4 @@ def prepare_dataset_with_external_validation(cache_root: Path, prepared_dir: Pat
     val_df = load_pad_ufes20_validation(val_dir)
     return train_df, val_df
 
-
-def get_data_generators(train_df: pd.DataFrame, val_df: pd.DataFrame, img_size: int = 224, batch_size: int = 32):
-    """ImageDataGenerator pipeline for keras flow_from_dataframe."""
-    train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(
-        rescale=1.0 / 255,
-        rotation_range=45,
-        width_shift_range=0.15,
-        height_shift_range=0.15,
-        shear_range=0.15,
-        zoom_range=0.2,
-        brightness_range=[0.85, 1.15],
-        horizontal_flip=True,
-        vertical_flip=True,
-        fill_mode='reflect',
-    )
-    val_datagen = tf.keras.preprocessing.image.ImageDataGenerator(rescale=1.0 / 255)
-
-    train_gen = train_datagen.flow_from_dataframe(
-        train_df, x_col='path', y_col='dx', target_size=(img_size, img_size),
-        batch_size=batch_size, class_mode='categorical', classes=CLASS_NAMES,
-    )
-    val_gen = val_datagen.flow_from_dataframe(
-        val_df, x_col='path', y_col='dx', target_size=(img_size, img_size),
-        batch_size=batch_size, class_mode='categorical', classes=CLASS_NAMES, shuffle=False,
-    )
-    return train_gen, val_gen
-
-
-def make_tf_dataset(paths, labels, batch_size: int = 32, img_size: int = 224, augment: bool = False, shuffle: bool = True):
-    """tf.data.Dataset pipeline for fast batched training."""
-    def parse(p, l):
-        img = tf.io.read_file(p)
-        img = tf.image.decode_image(img, channels=3, expand_animations=False)
-        img.set_shape([None, None, 3])
-        img = tf.image.resize(img, [img_size, img_size])
-        img = tf.cast(img, tf.float32)
-        return img, l
-
-    ds = tf.data.Dataset.from_tensor_slices((paths, labels))
-    if shuffle:
-        ds = ds.shuffle(5000, seed=42)
-    ds = ds.map(parse, num_parallel_calls=tf.data.AUTOTUNE)
-
-    if augment:
-        aug = tf.keras.Sequential([
-            tf.keras.layers.RandomFlip('horizontal'),
-            tf.keras.layers.RandomRotation(0.1),
-            tf.keras.layers.RandomZoom(0.1),
-            tf.keras.layers.RandomContrast(0.1),
-        ])
-        ds = ds.map(lambda x, y: (aug(x, training=True), y),
-                    num_parallel_calls=tf.data.AUTOTUNE)
-
-    ds = ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
-    return ds
-
-
-def compute_class_weights(y_train) -> dict:
-    """Compute balanced class weights dictionary."""
-    if isinstance(y_train, pd.Series):
-        classes = np.sort(y_train.unique())
-        weights = sk_class_weight.compute_class_weight('balanced', classes=classes, y=y_train)
-        return {i: float(w) for i, w in enumerate(weights)}
-    else:
-        classes = np.unique(y_train)
-        weights = sk_class_weight.compute_class_weight('balanced', classes=classes, y=y_train)
-        return dict(zip(classes, weights))
-
-
-# ─── Shared Training Utilities (Lazy TF classes) ─────────────────────────────
-
-from time import perf_counter
-
-
-def get_focal_loss_class():
-    import tensorflow as tf
-    class FocalLoss(tf.keras.losses.Loss):
-        """Focal loss supporting both one-hot and integer targets."""
-        def __init__(self, gamma=2.0, name='focal_loss', **kwargs):
-            super().__init__(name=name, **kwargs)
-            self.gamma = gamma
-
-        def call(self, y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1.0 - epsilon)
-            if len(y_true.shape) == len(y_pred.shape):
-                ce = -y_true * tf.math.log(y_pred)
-                modulating = tf.pow(1.0 - y_pred, self.gamma)
-                return tf.reduce_mean(modulating * ce)
-            else:
-                y_true_int = tf.cast(y_true, tf.int32)
-                pt = tf.gather(y_pred, y_true_int, batch_dims=1)
-                ce = -tf.math.log(pt)
-                modulating = tf.pow(1.0 - pt, self.gamma)
-                return tf.reduce_mean(modulating * ce)
-
-        def get_config(self):
-            config = super().get_config()
-            config.update({'gamma': self.gamma})
-            return config
-    return FocalLoss
-
-
-def get_epoch_timing_callback_class():
-    import tensorflow as tf
-    class EpochTimingCallback(tf.keras.callbacks.Callback):
-        """Callback to print elapsed time and metrics cleanly after each epoch."""
-        def __init__(self, stage_name='train'):
-            super().__init__()
-            self.stage_name = stage_name
-            self.epoch_start = None
-            self.stage_start = None
-
-        def on_train_begin(self, logs=None):
-            self.stage_start = perf_counter()
-            print(f"  [{self.stage_name}] training started")
-
-        def on_epoch_begin(self, epoch, logs=None):
-            self.epoch_start = perf_counter()
-
-        def on_epoch_end(self, epoch, logs=None):
-            elapsed = perf_counter() - self.epoch_start if self.epoch_start is not None else 0.0
-            metrics = ' | '.join(
-                f"{k}={v:.4f}" for k, v in (logs or {}).items() if isinstance(v, (int, float, np.floating, np.integer))
-            )
-            epoch_total = self.params.get('epochs', epoch + 1)
-            suffix = f" | {metrics}" if metrics else ""
-            print(f"  [{self.stage_name}] epoch {epoch + 1}/{epoch_total} took {elapsed:.1f}s{suffix}")
-
-        def on_train_end(self, logs=None):
-            if self.stage_start is not None:
-                total_elapsed = perf_counter() - self.stage_start
-                print(f"  [{self.stage_name}] training finished in {total_elapsed:.1f}s")
-    return EpochTimingCallback
 

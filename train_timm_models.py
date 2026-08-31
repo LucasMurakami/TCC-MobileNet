@@ -14,7 +14,6 @@ import time
 from time import perf_counter
 from pathlib import Path
 
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 import numpy as np
 import pandas as pd
@@ -37,6 +36,7 @@ torch.backends.cudnn.enabled = False
 torch.backends.cudnn.benchmark = False
 torch.backends.cudnn.deterministic = True
 
+from dataset import CLASS_NAMES, NUM_CLASSES
 from visualize import (
     plot_training_curves, plot_confusion_matrices,
     plot_per_class_metrics, generate_gradcam_gallery, plot_domain_comparison,
@@ -110,8 +110,7 @@ def compute_adaptive_batch_strategy(vram_gb: float, model_name: str, requested_b
     return micro_batch, grad_accum_steps
 
 
-CLASS_NAMES = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
-NUM_CLASSES = len(CLASS_NAMES)
+
 
 MODEL_CONFIGS = {
     'v1':      {'timm_name': 'mobilenetv1_100',                        'input_size': 224, 'default_lr1': 1e-3, 'default_lr2': 1e-4, 'weight_decay': 1e-4, 'pretrained': 'ImageNet-1k (timm)'},
@@ -136,8 +135,16 @@ class SkinDataset(Dataset):
         return len(self.paths)
 
     def __getitem__(self, idx):
-        img = Image.open(self.paths[idx]).convert('RGB')
         label = self.labels[idx]
+        try:
+            img = Image.open(self.paths[idx]).convert('RGB')
+        except Exception as e:
+            print(f"  [WARNING] Corrupt/missing image at index {idx}: {self.paths[idx]} — {e}. Using blank tensor.")
+            # Return a blank (black) image tensor with the correct label
+            if self.transform:
+                img = Image.new('RGB', (256, 256), (0, 0, 0))
+            else:
+                return torch.zeros(3, 256, 256), label
         if self.transform:
             img = self.transform(img)
         return img, label
@@ -171,12 +178,20 @@ def compute_class_weights(labels_series: pd.Series) -> dict:
     return {k: (v / w_sum) * NUM_CLASSES for k, v in weights.items()}
 
 
-def evaluate_dataset(model, loader, device, precision_dtype, has_cuda):
-    """Runs a complete evaluation pass on a dataset loader."""
+def evaluate_dataset(model, loader, device, precision_dtype, has_cuda, criterion=None):
+    """Runs a complete evaluation pass on a dataset loader.
+    
+    Args:
+        criterion: Loss function to use for validation loss computation.
+                   If None, defaults to CrossEntropyLoss for standard reporting.
+                   Pass the training Focal Loss during training to align
+                   validation loss with the training loss landscape.
+    """
     model.eval()
     all_preds, all_targets, all_probs = [], [], []
     v_loss, v_corr, v_tot = 0.0, 0, 0
-    criterion = nn.CrossEntropyLoss()
+    if criterion is None:
+        criterion = nn.CrossEntropyLoss()
 
     with torch.no_grad():
         for x, y in loader:
@@ -262,77 +277,31 @@ def evaluate_dataset(model, loader, device, precision_dtype, has_cuda):
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Dual-Domain PyTorch Pretrained Models Trainer')
-    parser.add_argument('--model', type=str, required=True, choices=['v1', 'v2', 'v3', 'v3small', 'v3large', 'v4', 'v4conv', 'v4convl', 'v5'])
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--batch-size', type=int, default=32)
-    parser.add_argument('--lr-stage1', type=float, default=None)
-    parser.add_argument('--lr-stage2', type=float, default=None)
-    parser.add_argument('--patience', type=int, default=8)
-    parser.add_argument('--img-size', type=int, default=None)
-    parser.add_argument('--train-csv', type=str, default=None, help='Training set CSV (HAM10000 80%)')
-    parser.add_argument('--val-csv', type=str, default=None, help='In-domain validation set CSV (HAM10000 20%)')
-    parser.add_argument('--external-val-csv', type=str, default=None, help='Out-of-domain validation set CSV (PAD-UFES-20)')
-    parser.add_argument('--val-dataset', type=str, default='both', choices=['ham10000', 'pad-ufes-20', 'both'])
-    parser.add_argument('--output-dir', type=str, default='./mobilenet_outputs')
-    parser.add_argument('--seed', type=int, default=42)
-    args = parser.parse_args()
-
-    # Canonicalize model aliases to standard 1-per-generation IDs (v1, v2, v3, v4, v5)
-    if args.model in ('v4conv', 'v4convl'):
-        args.model = 'v4'
-    elif args.model in ('v3large', 'v3small'):
-        args.model = 'v3'
-
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-
-    output_dir = Path(args.output_dir)
-    model_dir = output_dir / args.model
+def train_single_model(
+    model_name: str,
+    args,
+    output_dir: Path,
+    hw: dict,
+    train_df: pd.DataFrame,
+    ham_val_df: pd.DataFrame,
+    pad_val_df: pd.DataFrame
+) -> dict:
+    """Trains a single model architecture through Stage 1 & Stage 2 and performs dual-domain validation."""
+    model_dir = output_dir / model_name
     model_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Hardware Detection
-    hw = configure_hardware_environment()
     device = hw['device']
     has_cuda = (device.type == 'cuda')
     precision_dtype = hw['precision_dtype']
     use_scaler = has_cuda and not hw['has_bf16']
+    scaler = torch.amp.GradScaler('cuda') if use_scaler else None
 
-    # 2. Adaptive Batch Strategy
+    # Adaptive Batch Strategy
     micro_batch, grad_accum_steps = compute_adaptive_batch_strategy(
-        vram_gb=hw['vram_gb'], model_name=args.model, requested_batch=args.batch_size
+        vram_gb=hw['vram_gb'], model_name=model_name, requested_batch=args.batch_size
     )
 
-    # 3. Load Dataset DataFrames
-    data_cache = Path('./data_cache')
-    prepared_dir = Path('./dataset_treino')
-
-    if args.train_csv and Path(args.train_csv).exists():
-        train_df = pd.read_csv(args.train_csv)
-    else:
-        train_df = pd.read_csv('./mobilenet_outputs/train_df.csv')
-
-    # In-domain HAM10000 validation
-    if args.val_csv and Path(args.val_csv).exists():
-        ham_val_df = pd.read_csv(args.val_csv)
-    elif (output_dir / 'ham_val_df.csv').exists():
-        ham_val_df = pd.read_csv(output_dir / 'ham_val_df.csv')
-    else:
-        from dataset import prepare_dataset
-        _, ham_val_df = prepare_dataset(data_cache, prepared_dir, random_state=args.seed)
-
-    # Out-of-domain PAD-UFES-20 validation
-    if args.external_val_csv and Path(args.external_val_csv).exists():
-        pad_val_df = pd.read_csv(args.external_val_csv)
-    elif (output_dir / 'val_df.csv').exists() and len(pd.read_csv(output_dir / 'val_df.csv')) > 2200:
-        pad_val_df = pd.read_csv(output_dir / 'val_df.csv')
-    else:
-        from dataset import ensure_pad_ufes20_download, load_pad_ufes20_validation
-        pad_dir = ensure_pad_ufes20_download(data_cache)
-        pad_val_df = load_pad_ufes20_validation(pad_dir)
-
-    cfg = MODEL_CONFIGS[args.model]
+    cfg = MODEL_CONFIGS[model_name]
     img_size = args.img_size or cfg['input_size']
     timm_name = cfg['timm_name']
 
@@ -343,7 +312,7 @@ def main():
     print(f"\n{'='*80}")
     print(f" [Dual-Domain Multi-Phase Benchmark Pipeline]")
     print(f" Device: {hw['device_name']} ({hw['vram_gb']:.1f} GB VRAM, {hw['device_count']} GPU(s)) | Precision: {hw['precision_name']}")
-    print(f" Model: {args.model.upper()} ({timm_name}) | Pretrained: {cfg['pretrained']}")
+    print(f" Model: {model_name.upper()} ({timm_name}) | Pretrained: {cfg['pretrained']}")
     print(f" Datasets: Train (HAM10000: {len(train_df)}) | Val In-Domain (HAM: {len(ham_val_df)}) | Val OOD (PAD-UFES: {len(pad_val_df)})")
     print(f"{'='*80}\n")
 
@@ -351,8 +320,6 @@ def main():
     if hw['device_count'] > 1:
         model = nn.DataParallel(model)
     model = model.to(device)
-
-    scaler = torch.amp.GradScaler('cuda') if use_scaler else None
 
     train_transform = transforms.Compose([
         transforms.Resize((img_size, img_size)),
@@ -369,193 +336,202 @@ def main():
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
-    train_loader = DataLoader(SkinDataset(train_df, train_transform), batch_size=micro_batch, shuffle=True, num_workers=4, pin_memory=has_cuda)
-    ham_val_loader = DataLoader(SkinDataset(ham_val_df, val_transform), batch_size=micro_batch, shuffle=False, num_workers=4, pin_memory=has_cuda)
-    pad_val_loader = DataLoader(SkinDataset(pad_val_df, val_transform), batch_size=micro_batch, shuffle=False, num_workers=4, pin_memory=has_cuda)
+    train_ds = SkinDataset(train_df, transform=train_transform)
+    ham_val_ds = SkinDataset(ham_val_df, transform=val_transform)
+    pad_val_ds = SkinDataset(pad_val_df, transform=val_transform)
+
+    num_workers = min(4, os.cpu_count() or 1)
+    use_pin = (has_cuda and model_name != 'v5')
+    train_loader = DataLoader(train_ds, batch_size=micro_batch, shuffle=True, num_workers=num_workers, pin_memory=use_pin)
+    ham_val_loader = DataLoader(ham_val_ds, batch_size=micro_batch * 2, shuffle=False, num_workers=num_workers, pin_memory=use_pin)
+    pad_val_loader = DataLoader(pad_val_ds, batch_size=micro_batch * 2, shuffle=False, num_workers=num_workers, pin_memory=use_pin)
 
     weights_dict = compute_class_weights(train_df['dx'])
-    weight_tensor = torch.tensor([weights_dict[i] for i in range(NUM_CLASSES)], dtype=torch.float, device=device)
+    weight_tensor = torch.tensor([weights_dict[i] for i in range(NUM_CLASSES)], dtype=torch.float32).to(device)
     criterion = PyTorchFocalLoss(alpha=weight_tensor, gamma=2.0)
 
-    # ── Stage 1: Freeze Backbone & Warmup Head ──
-    for param in model.parameters():
+    # ──────────────────────────────────────────────────────────────────────────
+    # Stage 1: Warmup Classifier Head (Backbone Frozen)
+    # ──────────────────────────────────────────────────────────────────────────
+    raw_model = model.module if isinstance(model, nn.DataParallel) else model
+    for param in raw_model.parameters():
         param.requires_grad = False
-    base_model = model.module if hasattr(model, 'module') else model
-    head = base_model.get_classifier() if hasattr(base_model, 'get_classifier') else getattr(base_model, 'head', None)
-    if isinstance(head, nn.Module):
-        for param in head.parameters():
-            param.requires_grad = True
+    head = raw_model.get_classifier()
+    for param in head.parameters():
+        param.requires_grad = True
 
-    stage1_epochs = min(5, max(1, args.epochs // 5))
-    optimizer1 = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr_stage1, weight_decay=weight_decay)
-    print(f"--- Stage 1: Freeze backbone & Warmup head (lr={lr_stage1}, {stage1_epochs} epochs) ---")
+    stage1_epochs = max(min(args.epochs // 3, 15), 1)
+    optimizer1 = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr_stage1, weight_decay=weight_decay)
+    scheduler1 = optim.lr_scheduler.ReduceLROnPlateau(optimizer1, mode='min', factor=0.3, patience=2, min_lr=1e-7)
 
-    h1 = {'accuracy': [], 'loss': [], 'val_accuracy': [], 'val_loss': []}
-    log_interval_s1 = max(1, len(train_loader) // 100)
-    for epoch in range(1, stage1_epochs + 1):
+    print(f"\n--- Stage 1: Linear Warmup (Head Only, lr={lr_stage1}, epochs={stage1_epochs}) ---")
+    h1 = {'accuracy': [], 'val_accuracy': [], 'loss': [], 'val_loss': [], 'time_per_epoch': []}
+    best_s1_loss = float('inf')
+
+    for epoch in range(stage1_epochs):
+        t0 = perf_counter()
         model.train()
         total_loss, correct, total = 0.0, 0, 0
-        t0 = perf_counter()
-        pbar = tqdm(
-            train_loader,
-            desc=f"  [stage1] Epoch {epoch}/{stage1_epochs}",
-            unit="batch",
-            file=sys.stdout,
-            dynamic_ncols=True,
-            miniters=log_interval_s1,
-            mininterval=1.0
-        )
-        for i, (x, y) in enumerate(pbar):
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            if scaler:
-                with torch.amp.autocast('cuda', dtype=torch.float16):
-                    out = model(x)
-                    loss = criterion(out, y) / grad_accum_steps
-                scaler.scale(loss).backward()
-                if (i + 1) % grad_accum_steps == 0 or (i + 1) == len(train_loader):
-                    scaler.unscale_(optimizer1)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer1.zero_grad()
+
+        pbar = tqdm(train_loader, desc=f"Stage 1 Epoch {epoch+1}/{stage1_epochs}", leave=False)
+        for step, (inputs, targets) in enumerate(pbar):
+            inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+
+            if has_cuda:
+                with torch.amp.autocast('cuda', dtype=precision_dtype):
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets) / grad_accum_steps
+                if use_scaler:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+            else:
+                outputs = model(inputs)
+                loss = criterion(outputs, targets) / grad_accum_steps
+                loss.backward()
+
+            if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(train_loader):
+                if use_scaler:
                     scaler.step(optimizer1)
                     scaler.update()
-                    optimizer1.zero_grad()
-            else:
-                with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda else torch.nullcontext():
-                    out = model(x)
-                    loss = criterion(out, y) / grad_accum_steps
-                loss.backward()
-                if (i + 1) % grad_accum_steps == 0 or (i + 1) == len(train_loader):
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                else:
                     optimizer1.step()
-                    optimizer1.zero_grad()
+                optimizer1.zero_grad()
 
-            total_loss += loss.item() * grad_accum_steps * len(y)
-            correct += (out.argmax(dim=1) == y).sum().item()
-            total += len(y)
-            if (i + 1) % log_interval_s1 == 0 or (i + 1) == len(train_loader):
+            total_loss += loss.item() * grad_accum_steps * inputs.size(0)
+            preds = outputs.argmax(dim=1)
+            correct += (preds == targets).sum().item()
+            total += inputs.size(0)
+            if (step + 1) % 10 == 0 or (step + 1) == len(train_loader):
                 pbar.set_postfix({'loss': f"{total_loss / total:.4f}", 'acc': f"{correct / total:.4f}"})
 
+        epoch_time = perf_counter() - t0
         train_acc = correct / total
         train_loss = total_loss / total
 
-        # Evaluate on in-domain HAM10000
-        ham_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda)
+        val_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion)
+        val_acc, val_loss = val_eval['accuracy'], val_eval['loss']
+        scheduler1.step(val_loss)
+
         h1['accuracy'].append(train_acc)
+        h1['val_accuracy'].append(val_acc)
         h1['loss'].append(train_loss)
-        h1['val_accuracy'].append(ham_eval['accuracy'])
-        h1['val_loss'].append(ham_eval['loss'])
+        h1['val_loss'].append(val_loss)
+        h1['time_per_epoch'].append(epoch_time)
 
-        print(f"  [stage1] Epoch {epoch}/{stage1_epochs} summary ({perf_counter()-t0:.1f}s) | Train Acc: {train_acc:.4f} Loss: {train_loss:.4f} | HAM Val Acc: {ham_eval['accuracy']:.4f}\n")
-        sys.stdout.flush()
+        print(f"  Stage 1 Epoch {epoch+1:02d}/{stage1_epochs:02d} [{epoch_time:.1f}s] "
+              f"— Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} "
+              f"| Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} "
+              f"| lr: {optimizer1.param_groups[0]['lr']:.2e}")
 
-    # Stage 1 Benchmarks
-    print("\n--- Benchmarking Stage 1 (Warmup) State ---")
+        if val_loss < best_s1_loss:
+            best_s1_loss = val_loss
+            torch.save(raw_model.state_dict(), model_dir / 'stage1_head_best.pth')
+
+    # Intermediate Stage 1 benchmark
     s1_ham_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda)
     s1_pad_eval = evaluate_dataset(model, pad_val_loader, device, precision_dtype, has_cuda)
-    print(f"  Stage 1 -> In-Domain HAM10000 Acc: {s1_ham_eval['accuracy']:.2%} | Out-of-Domain PAD-UFES-20 Acc: {s1_pad_eval['accuracy']:.2%}\n")
+    print(f"\n[Stage 1 Complete] In-Domain (HAM) Acc: {s1_ham_eval['accuracy']:.2%} | OOD (PAD-UFES) Acc: {s1_pad_eval['accuracy']:.2%}\n")
 
-    # ── Stage 2: Deep Fine-Tuning with Early Stopping ──
-    if has_cuda:
-        torch.cuda.empty_cache()
-
-    if args.model == 'v5':
-        # For V5 (300M foundation backbone), fine-tune top representation stages & MSFA attention (~45M params)
-        for name, param in model.named_parameters():
-            if any(k in name for k in ('msfa', 'head', 'classifier', 'blocks.4', 'blocks.3', 'blocks.2')):
-                param.requires_grad = True
+    # ──────────────────────────────────────────────────────────────────────────
+    # Stage 2: End-to-End Fine-Tuning
+    # ──────────────────────────────────────────────────────────────────────────
+    if model_name == 'v5':
+        # Unfreeze deep semantic stages and adapters for 300M Gemma3n vision encoder
+        for name, p in raw_model.named_parameters():
+            if any(k in name for k in ['blocks.2', 'blocks.3', 'msfa', 'head', 'classifier']):
+                p.requires_grad = True
             else:
-                param.requires_grad = False
+                p.requires_grad = False
     else:
-        for param in model.parameters():
+        for param in raw_model.parameters():
             param.requires_grad = True
 
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    optimizer2 = optim.AdamW([p for p in model.parameters() if p.requires_grad], lr=lr_stage2, weight_decay=weight_decay)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer2, mode='min', factor=0.3, patience=2, min_lr=1e-7)
-    best_val_acc = 0.0
-    checkpoint_path = model_dir / 'best_model.pth'
-    patience_counter = 0
-    early_stopping_patience = args.patience
+    optimizer2 = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr_stage2, weight_decay=weight_decay)
+    scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(optimizer2, mode='min', factor=0.3, patience=3, min_lr=1e-8)
 
-    print(f"--- Stage 2: Deep Fine-Tuning with {hw['precision_name']} (lr={lr_stage2}, {args.epochs} epochs, {trainable_params:,} trainable params) ---")
-    h2 = {'accuracy': [], 'loss': [], 'val_accuracy': [], 'val_loss': []}
-    log_interval_s2 = max(1, len(train_loader) // 100)
-    for epoch in range(1, args.epochs + 1):
+    print(f"--- Stage 2: Backbone Fine-Tuning (lr={lr_stage2}, epochs={args.epochs}, patience={args.patience}) ---")
+    h2 = {'accuracy': [], 'val_accuracy': [], 'loss': [], 'val_loss': [], 'time_per_epoch': []}
+    best_val_loss = float('inf')
+    patience_counter = 0
+    checkpoint_path = model_dir / 'best_model.pth'
+
+    for epoch in range(args.epochs):
+        t0 = perf_counter()
         model.train()
         total_loss, correct, total = 0.0, 0, 0
-        t0 = perf_counter()
-        pbar = tqdm(
-            train_loader,
-            desc=f"  [stage2] Epoch {epoch}/{args.epochs}",
-            unit="batch",
-            file=sys.stdout,
-            dynamic_ncols=True,
-            miniters=log_interval_s2,
-            mininterval=1.0
-        )
-        for i, (x, y) in enumerate(pbar):
-            x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            if scaler:
-                with torch.amp.autocast('cuda', dtype=torch.float16):
-                    out = model(x)
-                    loss = criterion(out, y) / grad_accum_steps
-                scaler.scale(loss).backward()
-                if (i + 1) % grad_accum_steps == 0 or (i + 1) == len(train_loader):
-                    scaler.unscale_(optimizer2)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer2.zero_grad()
+
+        pbar = tqdm(train_loader, desc=f"Stage 2 Epoch {epoch+1}/{args.epochs}", leave=False)
+        for step, (inputs, targets) in enumerate(pbar):
+            inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
+
+            if has_cuda:
+                with torch.amp.autocast('cuda', dtype=precision_dtype):
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets) / grad_accum_steps
+                if use_scaler:
+                    scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+            else:
+                outputs = model(inputs)
+                loss = criterion(outputs, targets) / grad_accum_steps
+                loss.backward()
+
+            if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(train_loader):
+                if use_scaler:
                     scaler.step(optimizer2)
                     scaler.update()
-                    optimizer2.zero_grad()
-            else:
-                with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda else torch.nullcontext():
-                    out = model(x)
-                    loss = criterion(out, y) / grad_accum_steps
-                loss.backward()
-                if (i + 1) % grad_accum_steps == 0 or (i + 1) == len(train_loader):
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                else:
                     optimizer2.step()
-                    optimizer2.zero_grad()
+                optimizer2.zero_grad()
 
-            total_loss += loss.item() * grad_accum_steps * len(y)
-            correct += (out.argmax(dim=1) == y).sum().item()
-            total += len(y)
-            if (i + 1) % log_interval_s2 == 0 or (i + 1) == len(train_loader):
+            total_loss += loss.item() * grad_accum_steps * inputs.size(0)
+            preds = outputs.argmax(dim=1)
+            correct += (preds == targets).sum().item()
+            total += inputs.size(0)
+            if (step + 1) % 10 == 0 or (step + 1) == len(train_loader):
                 pbar.set_postfix({'loss': f"{total_loss / total:.4f}", 'acc': f"{correct / total:.4f}"})
+            if (step + 1) % 50 == 0 and has_cuda:
+                torch.cuda.empty_cache()
 
+        epoch_time = perf_counter() - t0
         train_acc = correct / total
         train_loss = total_loss / total
 
-        # Evaluate on primary validation set (HAM10000 in-domain)
-        ham_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda)
-        val_acc = ham_eval['accuracy']
-        val_loss = ham_eval['loss']
-        scheduler.step(val_loss)
-
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
-            patience_counter = 0
-            save_obj = model.module.state_dict() if hasattr(model, 'module') else model.state_dict()
-            torch.save(save_obj, checkpoint_path)
-        else:
-            patience_counter += 1
+        val_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion)
+        val_acc, val_loss = val_eval['accuracy'], val_eval['loss']
+        scheduler2.step(val_loss)
 
         h2['accuracy'].append(train_acc)
-        h2['loss'].append(train_loss)
         h2['val_accuracy'].append(val_acc)
+        h2['loss'].append(train_loss)
         h2['val_loss'].append(val_loss)
-        print(f"  [stage2] Epoch {epoch}/{args.epochs} summary ({perf_counter()-t0:.1f}s) | Train Acc: {train_acc:.4f} Loss: {train_loss:.4f} | HAM Val Acc: {val_acc:.4f} Loss: {val_loss:.4f}\n")
-        sys.stdout.flush()
+        h2['time_per_epoch'].append(epoch_time)
 
-        if patience_counter >= early_stopping_patience:
-            print(f"\n[EarlyStopping] In-domain validation accuracy did not improve for {early_stopping_patience} consecutive epochs. Restoring best weights from {checkpoint_path}.")
-            break
+        print(f"  Stage 2 Epoch {epoch+1:02d}/{args.epochs:02d} [{epoch_time:.1f}s] "
+              f"— Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} "
+              f"| Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} "
+              f"| lr: {optimizer2.param_groups[0]['lr']:.2e}")
 
-    # ── Final Dual-Domain Comprehensive Evaluation ──
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            torch.save(raw_model.state_dict(), checkpoint_path)
+            print(f"  ⭐ New best checkpoint saved (val_loss: {val_loss:.4f})")
+        else:
+            patience_counter += 1
+            if patience_counter >= args.patience:
+                print(f"\n[EarlyStopping] Validation loss did not improve for {args.patience} epochs. Stopping.")
+                break
+
     if checkpoint_path.exists():
-        raw_model = model.module if hasattr(model, 'module') else model
         raw_model.load_state_dict(torch.load(checkpoint_path))
 
     print(f"\n{'='*80}")
-    print(f" 🏆 Running Final Dual-Domain Benchmark Evaluation on {args.model.upper()}")
+    print(f" 🏆 Running Final Dual-Domain Benchmark Evaluation on {model_name.upper()}")
     print(f"{'='*80}\n")
 
     # 1. In-Domain Evaluation (HAM10000)
@@ -564,10 +540,10 @@ def main():
     ham_dir.mkdir(parents=True, exist_ok=True)
     with open(ham_dir / 'classification_report.json', 'w') as f:
         json.dump(ham_results['report'], f, indent=2)
-    plot_confusion_matrices(ham_results['all_targets'], ham_results['all_preds'], CLASS_NAMES, ham_dir / 'confusion_matrix.png', model_name=f"{args.model} (HAM10000)")
-    plot_per_class_metrics(ham_results['report'], CLASS_NAMES, ham_dir / 'per_class_metrics.png', model_name=f"{args.model} (HAM10000)")
-    plot_roc_curves(ham_results['all_targets'], ham_results['all_probs'], CLASS_NAMES, ham_dir / 'roc_curves.png', model_name=f"{args.model} (HAM10000)")
-    generate_gradcam_gallery(model=model, val_df=ham_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=ham_dir / 'gradcam_heatmaps.png', model_name=f"{args.model}_HAM", device=device)
+    plot_confusion_matrices(ham_results['all_targets'], ham_results['all_preds'], CLASS_NAMES, ham_dir / 'confusion_matrix.png', model_name=f"{model_name} (HAM10000)")
+    plot_per_class_metrics(ham_results['report'], CLASS_NAMES, ham_dir / 'per_class_metrics.png', model_name=f"{model_name} (HAM10000)")
+    plot_roc_curves(ham_results['all_targets'], ham_results['all_probs'], CLASS_NAMES, ham_dir / 'roc_curves.png', model_name=f"{model_name} (HAM10000)")
+    generate_gradcam_gallery(model=model, val_df=ham_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=ham_dir / 'gradcam_heatmaps.png', model_name=f"{model_name}_HAM", device=device)
 
     # 2. Out-of-Domain Evaluation (PAD-UFES-20)
     pad_results = evaluate_dataset(model, pad_val_loader, device, precision_dtype, has_cuda)
@@ -575,26 +551,26 @@ def main():
     pad_dir.mkdir(parents=True, exist_ok=True)
     with open(pad_dir / 'classification_report.json', 'w') as f:
         json.dump(pad_results['report'], f, indent=2)
-    plot_confusion_matrices(pad_results['all_targets'], pad_results['all_preds'], CLASS_NAMES, pad_dir / 'confusion_matrix.png', model_name=f"{args.model} (PAD-UFES-20)")
-    plot_per_class_metrics(pad_results['report'], CLASS_NAMES, pad_dir / 'per_class_metrics.png', model_name=f"{args.model} (PAD-UFES-20)")
-    plot_roc_curves(pad_results['all_targets'], pad_results['all_probs'], CLASS_NAMES, pad_dir / 'roc_curves.png', model_name=f"{args.model} (PAD-UFES-20)")
-    generate_gradcam_gallery(model=model, val_df=pad_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=pad_dir / 'gradcam_heatmaps.png', model_name=f"{args.model}_PAD", device=device)
+    plot_confusion_matrices(pad_results['all_targets'], pad_results['all_preds'], CLASS_NAMES, pad_dir / 'confusion_matrix.png', model_name=f"{model_name} (PAD-UFES-20)")
+    plot_per_class_metrics(pad_results['report'], CLASS_NAMES, pad_dir / 'per_class_metrics.png', model_name=f"{model_name} (PAD-UFES-20)")
+    plot_roc_curves(pad_results['all_targets'], pad_results['all_probs'], CLASS_NAMES, pad_dir / 'roc_curves.png', model_name=f"{model_name} (PAD-UFES-20)")
+    generate_gradcam_gallery(model=model, val_df=pad_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=pad_dir / 'gradcam_heatmaps.png', model_name=f"{model_name}_PAD", device=device)
 
     # 3. Overall Curves & Domain Comparison Chart
-    plot_training_curves([h1, h2], ['Stage 1 (Head)', 'Stage 2 (Fine-Tune)'], model_dir / 'training_curves.png', model_name=args.model)
-    plot_domain_comparison(ham_results, pad_results, model_name=args.model, output_path=model_dir / 'domain_comparison.png')
-    plot_dual_roc_comparison(ham_results, pad_results, CLASS_NAMES, model_dir / 'roc_curves_dual_domain.png', model_name=args.model)
+    plot_training_curves([h1, h2], ['Stage 1 (Head)', 'Stage 2 (Fine-Tune)'], model_dir / 'training_curves.png', model_name=model_name)
+    plot_domain_comparison(ham_results, pad_results, model_name=model_name, output_path=model_dir / 'domain_comparison.png')
+    plot_dual_roc_comparison(ham_results, pad_results, CLASS_NAMES, model_dir / 'roc_curves_dual_domain.png', model_name=model_name)
 
     # Also save top-level confusion matrix & report (for PAD-UFES-20) for backward compatibility
-    plot_confusion_matrices(pad_results['all_targets'], pad_results['all_preds'], CLASS_NAMES, model_dir / 'confusion_matrix.png', model_name=args.model)
-    plot_per_class_metrics(pad_results['report'], CLASS_NAMES, model_dir / 'per_class_metrics.png', model_name=args.model)
-    plot_roc_curves(pad_results['all_targets'], pad_results['all_probs'], CLASS_NAMES, model_dir / 'roc_curves.png', model_name=args.model)
-    generate_gradcam_gallery(model=model, val_df=pad_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=model_dir / 'gradcam_heatmaps.png', model_name=args.model, device=device)
+    plot_confusion_matrices(pad_results['all_targets'], pad_results['all_preds'], CLASS_NAMES, model_dir / 'confusion_matrix.png', model_name=model_name)
+    plot_per_class_metrics(pad_results['report'], CLASS_NAMES, model_dir / 'per_class_metrics.png', model_name=model_name)
+    plot_roc_curves(pad_results['all_targets'], pad_results['all_probs'], CLASS_NAMES, model_dir / 'roc_curves.png', model_name=model_name)
+    generate_gradcam_gallery(model=model, val_df=pad_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=model_dir / 'gradcam_heatmaps.png', model_name=model_name, device=device)
 
     domain_gap = ham_results['accuracy'] - pad_results['accuracy']
 
     full_results = {
-        'model': args.model,
+        'model': model_name,
         'pretrained': cfg['pretrained'],
         'img_size': img_size,
         'batch_size': args.batch_size,
@@ -615,7 +591,7 @@ def main():
         'ham_macro_auc_roc': ham_results['macro_auc_roc'],
         'ham_harmonized_5class_acc': ham_results['harmonized_5class_acc'],
 
-        # Stage 2 Out-of-Domain PAD-UFES-20 Metrics (Explicit & Standardized)
+        # Stage 2 Out-of-Domain PAD-UFES-20 Metrics
         'pad_accuracy': pad_results['accuracy'],
         'pad_weighted_f1': pad_results['weighted_avg_f1'],
         'pad_macro_f1': pad_results['macro_avg_f1'],
@@ -626,17 +602,6 @@ def main():
         'pad_macro_auc_roc': pad_results['macro_auc_roc'],
         'pad_harmonized_5class_acc': pad_results['harmonized_5class_acc'],
 
-        # Out-of-Domain Legacy Aliases (for backward compatibility)
-        'accuracy': pad_results['accuracy'],
-        'weighted_avg_f1': pad_results['weighted_avg_f1'],
-        'macro_avg_f1': pad_results['macro_avg_f1'],
-        'mel_recall': pad_results['mel_recall'],
-        'bcc_recall': pad_results['bcc_recall'],
-        'akiec_recall': pad_results['akiec_recall'],
-        'mel_auc_roc': pad_results['mel_auc_roc'],
-        'macro_auc_roc': pad_results['macro_auc_roc'],
-        'harmonized_5class_acc': pad_results['harmonized_5class_acc'],
-
         # Clinical Domain Shift Drop (In-Domain - Out-of-Domain)
         'domain_gap': float(domain_gap),
         'domain_gap_drop': float(domain_gap)
@@ -646,7 +611,7 @@ def main():
         json.dump(full_results, f, indent=2)
 
     print(f"\n===========================================================================")
-    print(f" 📊 Final Results Summary for {args.model.upper()}:")
+    print(f" 📊 Final Results Summary for {model_name.upper()}:")
     print(f"   In-Domain (HAM10000):   Accuracy={ham_results['accuracy']:.2%} | Weighted F1={ham_results['weighted_avg_f1']:.4f} | Mel Recall={ham_results['mel_recall']:.2%} | Mel AUC-ROC={ham_results['mel_auc_roc']:.4f}")
     print(f"   Out-of-Domain (PAD-UFES): Accuracy={pad_results['accuracy']:.2%} | Weighted F1={pad_results['weighted_avg_f1']:.4f} | Mel Recall={pad_results['mel_recall']:.2%} | Mel AUC-ROC={pad_results['mel_auc_roc']:.4f}")
     print(f"   Clinical Domain Gap (Δ Acc Drop): -{domain_gap*100:.2f}%")
@@ -655,6 +620,9 @@ def main():
     print(f"   Dual-Domain ROC Analysis: {model_dir / 'roc_curves_dual_domain.png'}")
     print(f"===========================================================================\n")
 
+    return full_results
+
 
 if __name__ == '__main__':
+    from main import main
     main()

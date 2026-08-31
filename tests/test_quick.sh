@@ -8,7 +8,7 @@ for model in v1 v2 v3small v3large v4conv; do
     echo "======================================"
     echo "  Testing $model (2 epochs)"
     echo "======================================"
-    python train_mobilenets.py \
+    python train_timm_models.py \
         --model "$model" \
         --epochs 2 \
         --batch-size 48 \

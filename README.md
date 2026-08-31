@@ -71,9 +71,9 @@ To reconcile 7-class deep representation learning with clinical screening and tr
 ## 🏗️ Repository Architecture
 
 ```text
+├── main.py                     # Unified CLI entrypoint, dataset orchestrator & benchmark summary logger
+├── train_timm_models.py        # Core PyTorch + timm backbone engine, Focal Loss & Dual-Domain training loop
 ├── dataset.py                  # Dataset loaders, stratified splits, oversampling & PAD-UFES taxonomy mapping
-├── train_timm_models.py        # Core PyTorch + timm Dual-Domain trainer with BFloat16 AMP, AUC-ROC & Grad-CAM
-├── train_mobilenets.py         # CLI dispatcher for single-model or full-suite training runs
 ├── run_scenarios.py            # Automated scenario runner (Maximum -> Medium -> Low) with date-versioned isolation
 ├── run_grid_search.py          # Multi-hyperparameter grid search orchestrator with auto-resume
 ├── visualize.py                # ROC curves, dual confusion matrices, Grad-CAM heatmaps & domain comparison charts

@@ -1,19 +1,25 @@
-import sys; sys.path.insert(0, '.')
-from train_mobilenets import build_mobilenet_model, FocalLoss
-import tensorflow as tf
-import numpy as np
+import sys
+from pathlib import Path
+import torch
 
-# Test focal loss
-loss = FocalLoss(gamma=2.0)
-y_true = tf.constant([[1,0,0],[0,1,0],[0,0,1]], dtype=tf.float32)
-y_pred = tf.constant([[0.9,0.05,0.05],[0.1,0.8,0.1],[0.1,0.1,0.8]], dtype=tf.float32)
-l = loss(y_true, y_pred)
-print(f'Focal loss test: {l.numpy():.4f}')
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from train_timm_models import PyTorchFocalLoss
 
-# Build model and test save/load
-model = build_mobilenet_model('v3small', 224, 7)
-model.compile(optimizer='adam', loss=FocalLoss(gamma=2.0), metrics=['accuracy'])
-model.save('/tmp/test_focal.keras')
-model2 = tf.keras.models.load_model('/tmp/test_focal.keras', custom_objects={'FocalLoss': FocalLoss})
-print(f'Model save/load OK - params: {model2.count_params()/1e6:.2f}M')
-print('All tests passed!')
+# Test PyTorch Focal Loss
+weight = torch.tensor([1.0, 2.0, 1.5], dtype=torch.float32)
+loss_fn = PyTorchFocalLoss(alpha=weight, gamma=2.0)
+
+# Batch of 3 samples with 3 classes
+logits = torch.tensor([
+    [3.0, 0.1, -1.0],
+    [0.2, 4.0, 0.5],
+    [-0.5, 0.2, 2.8]
+], dtype=torch.float32)
+targets = torch.tensor([0, 1, 2], dtype=torch.long)
+
+loss_val = loss_fn(logits, targets)
+print(f"PyTorch Focal Loss computation OK - loss: {loss_val.item():.4f}")
+assert loss_val.item() > 0.0, "Loss value should be strictly positive"
+
+print("All tests passed!")
+

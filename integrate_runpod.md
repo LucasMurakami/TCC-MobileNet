@@ -60,10 +60,10 @@ cp -r /mnt/data/data_cache /workspace/TCC/
 
 ## 4) Verify the environment
 
-Check Python and CUDA before training:
+Check Python, PyTorch and CUDA before training:
 
 ```bash
-python -c "import tensorflow as tf; print(tf.__version__); print(tf.config.list_physical_devices('GPU'))"
+python -c "import torch; print('PyTorch:', torch.__version__, '| CUDA Available:', torch.cuda.is_available(), '| Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')"
 ```
 
 You should see at least one GPU listed.
@@ -73,35 +73,32 @@ You should see at least one GPU listed.
 The training entry point is:
 
 ```bash
-python train_mobilenetv5.py
+python train_timm_models.py --model v4 --epochs 50 --batch-size 32
 ```
 
 With the main options:
 
 ```bash
-python train_mobilenetv5.py \
-  --config b0 \
-  --epochs-stage1 20 \
-  --epochs-stage2 50 \
+python train_timm_models.py \
+  --model v4 \
+  --epochs 50 \
   --batch-size 32 \
-  --img-size 224 \
-  --data-dir dataset_treino \
-  --output-dir mobilenetv5_output \
-  --gpu 0
+  --lr-stage1 1e-3 \
+  --lr-stage2 1e-4 \
+  --patience 10 \
+  --val-dataset pad-ufes-20 \
+  --output-dir mobilenet_outputs
 ```
 
-A larger model variant is also available:
+To run all generations (V1 through V5):
 
 ```bash
-python train_mobilenetv5.py \
-  --config b1 \
-  --epochs-stage1 20 \
-  --epochs-stage2 50 \
-  --batch-size 16 \
-  --img-size 224 \
-  --data-dir dataset_treino \
-  --output-dir mobilenetv5_output_b1 \
-  --gpu 0
+python train_timm_models.py \
+  --model all \
+  --epochs 50 \
+  --batch-size 32 \
+  --val-dataset pad-ufes-20 \
+  --output-dir mobilenet_outputs
 ```
 
 ## 6) Output files
@@ -109,23 +106,26 @@ python train_mobilenetv5.py \
 The script writes results to the output directory, for example:
 
 ```bash
-mobilenetv5_output/
-  stage1_best.weights.h5
-  stage2_best.weights.h5
-  model.keras
+mobilenet_outputs/v4/
+  best_model.pth
+  stage1_head_best.pth
   results.json
-  stage1_evaluation.png
-  stage2_evaluation.png
+  classification_report.json
+  confusion_matrix.png
+  per_class_metrics.png
+  training_curves.png
+  roc_curves.png
+  gradcam_heatmaps.png
 ```
 
-These are created automatically by the script.
+These are created automatically by the PyTorch / timm trainer.
 
 ## 7) Long-running training on RunPod
 
 For longer jobs, start the training in the background and log the output:
 
 ```bash
-nohup bash -lc 'source .venv/bin/activate && cd /workspace/TCC && python train_mobilenetv5.py --config b0 --epochs-stage1 20 --epochs-stage2 50 --batch-size 32 --img-size 224 --data-dir dataset_treino --output-dir mobilenetv5_output --gpu 0' > runpod_train.log 2>&1 &
+nohup bash -lc 'source .venv/bin/activate && cd /workspace/TCC && python train_timm_models.py --model all --epochs 50 --batch-size 32 --val-dataset pad-ufes-20 --output-dir mobilenet_outputs' > runpod_train.log 2>&1 &
 ```
 
 Then monitor:
@@ -139,7 +139,7 @@ tail -f runpod_train.log
 Once training completes, copy the output folder back to your local machine:
 
 ```bash
-zip -r mobilenetv5_output.zip mobilenetv5_output
+zip -r mobilenet_outputs.zip mobilenet_outputs
 ```
 
 Then use RunPod file browser or `scp` to download the zip file.
@@ -151,9 +151,9 @@ Recommended sequence:
 1. Start a GPU pod
 2. Clone or mount the repo
 3. Install dependencies
-4. Upload or mount the HAM10000 dataset
+4. Upload or mount datasets (`data_cache` with HAM10000 and PAD-UFES-20)
 5. Run the model training command
-6. Save and download `results.json`, metrics, and model weights
+6. Save and download `results.json`, metrics, and PyTorch model checkpoints (`best_model.pth`)
 
 ## 10) Fastest command for this repo
 
@@ -162,15 +162,15 @@ If you just want the quickest version:
 ```bash
 cd /workspace/TCC
 source .venv/bin/activate
-python train_mobilenetv5.py --config b0 --batch-size 32 --gpu 0
+python train_timm_models.py --model v3small --epochs 2 --batch-size 32
 ```
 
-This uses the default arguments already configured in the script and should work well as a baseline on RunPod.
+This uses the default arguments already configured in the script and runs a fast sanity check on RunPod.
 
 ## 11) Notes for this project
 
-- The script uses TensorFlow/Keras and expects a CUDA-enabled environment.
-- The dataset is not downloaded automatically inside the script for the MobileNetV5 trainer; it expects your dataset to already be prepared in `dataset_treino`.
+- The suite uses PyTorch / timm with automatic Mixed Precision (BFloat16 / FP16) and expects a CUDA-enabled environment.
+- The dataset is automatically downloaded from Kaggle (HAM10000) or loaded from `data_cache/pad_ufes_20_raw` (PAD-UFES-20).
 - If your project is stored on a mounted volume, keep the paths consistent to avoid training from a different folder than the one with the dataset.
 
 ## 12) Example full RunPod terminal flow
@@ -183,17 +183,15 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
-ls dataset_treino
-python -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
-python train_mobilenetv5.py \
-  --config b0 \
-  --epochs-stage1 20 \
-  --epochs-stage2 50 \
+python -c "import torch; print('CUDA:', torch.cuda.is_available())"
+python train_timm_models.py \
+  --model v4 \
+  --epochs 50 \
   --batch-size 32 \
-  --img-size 224 \
-  --data-dir dataset_treino \
-  --output-dir mobilenetv5_output \
-  --gpu 0
+  --val-dataset pad-ufes-20 \
+  --output-dir mobilenet_outputs
 ```
 
 This is the standard RunPod integration flow for this repository.
+
+
