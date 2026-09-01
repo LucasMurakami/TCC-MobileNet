@@ -161,6 +161,9 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
                 'domain_gap': round(gap, 4),
                 'ham_mel_auc_roc': round(float(data.get('ham_mel_auc_roc', 0.0)), 4),
                 'mel_auc_roc': round(float(data.get('pad_mel_auc_roc', 0.0)), 4),
+                'triage_th': round(float(data.get('mel_triage_threshold', 0.15)), 2) if data.get('mel_triage_threshold') is not None else 0.15,
+                'ham_triage_sens': round(float(data.get('ham_mel_triage_recall', data.get('ham_mel_recall', 0.0))), 4),
+                'pad_triage_sens': round(float(data.get('pad_mel_triage_recall', data.get('pad_mel_recall', 0.0))), 4),
                 'ham_mel_recall': round(float(data.get('ham_mel_recall', 0.0)), 4),
                 'mel_recall': round(float(data.get('pad_mel_recall', 0.0)), 4),
                 'ham_weighted_f1': round(float(data.get('ham_weighted_f1', 0.0)), 4),
@@ -290,6 +293,14 @@ def parse_args():
     parser.add_argument('--prepared-dir', type=str, default='./dataset_treino', help='Prepared dataset directory')
     parser.add_argument('--pad-ufes-dir', type=str, default='./data_cache/pad_ufes_20_raw', help='PAD-UFES-20 dataset directory')
     parser.add_argument('--val-dataset', type=str, default='both', choices=['ham10000', 'pad-ufes-20', 'both'])
+    parser.add_argument('--mel-threshold', type=str, default=None,
+                        help="Operating sensitivity threshold for melanoma triage (e.g. 0.15, 'auto', 'youden', 'sens90', 'sens95'). CLI always overrides benchmark_scenarios.json.")
+    parser.add_argument('--balanced-sampling', action='store_true', default=False,
+                        help="Enable class-balanced mini-batch sampling via WeightedRandomSampler (eliminates 67%% Nevus gradient dominance).")
+    parser.add_argument('--logit-adjust', type=float, default=None,
+                        help="Post-hoc Bayesian logit adjustment strength tau (e.g. 1.0) to cancel training prior penalty on minority classes.")
+    parser.add_argument('--mixup-minority', type=float, default=None,
+                        help="Beta-distribution alpha parameter (e.g. 0.2) for minority class Mixup data augmentation.")
     parser.add_argument('--output-dir', type=str, default=None, help='Custom output directory (overrides auto-session)')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
     return parser.parse_args()
@@ -383,9 +394,48 @@ def main():
         model_args.lr_stage2 = args.lr_stage2 if args.lr_stage2 is not None else m_cfg.get('lr_stage2', None)
         model_args.seed = args.seed if args.seed is not None else m_cfg.get('seed', 42)
 
+        # Melanoma Triage Threshold Resolution: CLI argument > model JSON > scenario JSON > default 0.15
+        if args.mel_threshold is not None:
+            model_args.mel_threshold = args.mel_threshold
+        elif 'mel_threshold' in m_cfg:
+            model_args.mel_threshold = m_cfg['mel_threshold']
+        elif 'mel_threshold' in scenario_cfg:
+            model_args.mel_threshold = scenario_cfg['mel_threshold']
+        else:
+            model_args.mel_threshold = 0.15
+
+        # Long-Tail Learning Resolutions (CLI flag > model JSON > scenario JSON > default)
+        if args.balanced_sampling:
+            model_args.balanced_sampling = True
+        elif 'balanced_sampling' in m_cfg:
+            model_args.balanced_sampling = m_cfg['balanced_sampling']
+        elif 'balanced_sampling' in scenario_cfg:
+            model_args.balanced_sampling = scenario_cfg['balanced_sampling']
+        else:
+            model_args.balanced_sampling = False
+
+        if args.logit_adjust is not None:
+            model_args.logit_adjust = args.logit_adjust
+        elif 'logit_adjust' in m_cfg:
+            model_args.logit_adjust = m_cfg['logit_adjust']
+        elif 'logit_adjust' in scenario_cfg:
+            model_args.logit_adjust = scenario_cfg['logit_adjust']
+        else:
+            model_args.logit_adjust = 0.0
+
+        if args.mixup_minority is not None:
+            model_args.mixup_minority = args.mixup_minority
+        elif 'mixup_minority' in m_cfg:
+            model_args.mixup_minority = m_cfg['mixup_minority']
+        elif 'mixup_minority' in scenario_cfg:
+            model_args.mixup_minority = scenario_cfg['mixup_minority']
+        else:
+            model_args.mixup_minority = 0.0
+
         print(f"\n⚙️  Configuring {m.upper()} from scenario '{args.scenario}': "
               f"epochs={model_args.epochs}, patience={model_args.patience}, batch_size={model_args.batch_size}, "
-              f"lr1={model_args.lr_stage1}, lr2={model_args.lr_stage2}")
+              f"lr1={model_args.lr_stage1}, lr2={model_args.lr_stage2}, mel_threshold={model_args.mel_threshold}, "
+              f"balanced_sampling={model_args.balanced_sampling}, logit_adjust={model_args.logit_adjust}, mixup={model_args.mixup_minority}")
 
         result = train_single_model(m, model_args, output_dir, hw, train_df, ham_val_df, pad_val_df)
         all_results[m] = result

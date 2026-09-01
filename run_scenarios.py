@@ -296,6 +296,11 @@ def main():
             pat = cfg['patience']
             seed = cfg['seed']
 
+            mel_threshold = cfg.get('mel_threshold', s_info.get('mel_threshold', 'youden'))
+            balanced_sampling = cfg.get('balanced_sampling', s_info.get('balanced_sampling', True))
+            logit_adjust = float(cfg.get('logit_adjust', s_info.get('logit_adjust', 1.0)) or 0.0)
+            mixup_minority = float(cfg.get('mixup_minority', s_info.get('mixup_minority', 0.2)) or 0.0)
+
             exp_id = f"{s_key}_{model_name}_ep{epochs}_bs{bs}_lr2_{lr2}_pat{pat}_seed{seed}"
             exp_dir = session_dir / 'scenarios' / s_key / model_name
             exp_dir.mkdir(parents=True, exist_ok=True)
@@ -319,6 +324,10 @@ def main():
                 'lr_stage2': lr2,
                 'patience': pat,
                 'seed': seed,
+                'mel_threshold': mel_threshold,
+                'balanced_sampling': balanced_sampling,
+                'logit_adjust': logit_adjust,
+                'mixup_minority': mixup_minority,
                 'val_dataset': 'dual (HAM10000 + PAD-UFES-20)',
                 'timestamp_start': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'python_version': sys.version.split()[0],
@@ -327,7 +336,8 @@ def main():
             with open(exp_dir / 'config.json', 'w') as f:
                 json.dump(config_data, f, indent=2)
 
-            print(f"  ▶️ [TRAINING] Epochs={epochs}, LR2={lr2}, BatchSize={bs}, Patience={pat}")
+            print(f"  ▶️ [TRAINING] Epochs={epochs}, LR2={lr2}, BatchSize={bs}, Patience={pat}, "
+                  f"BalancedSampling={balanced_sampling}, LogitAdjust={logit_adjust}, Mixup={mixup_minority}, Threshold={mel_threshold}")
 
             cmd = [
                 args.python_bin, 'train_timm_models.py',
@@ -345,10 +355,20 @@ def main():
                 '--seed', str(seed),
             ]
 
+            if balanced_sampling:
+                cmd.append('--balanced-sampling')
+            if logit_adjust > 0.0:
+                cmd.extend(['--logit-adjust', str(logit_adjust)])
+            if mixup_minority > 0.0:
+                cmd.extend(['--mixup-minority', str(mixup_minority)])
+            if mel_threshold is not None:
+                cmd.extend(['--mel-threshold', str(mel_threshold)])
+
             t0 = time.perf_counter()
             try:
                 env = os.environ.copy()
                 env['PYTHONUNBUFFERED'] = '1'
+                env['HF_HUB_OFFLINE'] = '1'
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,

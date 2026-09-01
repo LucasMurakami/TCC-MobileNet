@@ -26,7 +26,7 @@ from PIL import Image
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torchvision import transforms
 import timm
 from tqdm import tqdm
@@ -178,14 +178,43 @@ def compute_class_weights(labels_series: pd.Series) -> dict:
     return {k: (v / w_sum) * NUM_CLASSES for k, v in weights.items()}
 
 
-def evaluate_dataset(model, loader, device, precision_dtype, has_cuda, criterion=None):
-    """Runs a complete evaluation pass on a dataset loader.
+def compute_class_priors(labels_series: pd.Series) -> np.ndarray:
+    """Computes empirical training set class prior distribution vector."""
+    counts = labels_series.value_counts()
+    n_samples = len(labels_series)
+    return np.array([counts.get(c, 0) / max(n_samples, 1) for c in CLASS_NAMES], dtype=np.float32)
+
+
+def mixup_data(x, y, alpha=0.2):
+    """Performs Beta-distributed Mixup interpolation on input tensors and target labels."""
+    if alpha <= 0.0:
+        return x, y, y, 1.0
+    lam = float(np.random.beta(alpha, alpha))
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size, device=x.device)
+    mixed_x = lam * x + (1.0 - lam) * x[index]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
+def evaluate_dataset(
+    model,
+    loader,
+    device,
+    precision_dtype,
+    has_cuda,
+    criterion=None,
+    mel_threshold=None,
+    logit_adjust=0.0,
+    class_priors=None
+):
+    """Runs a complete evaluation pass on a dataset loader with optional Logit Adjustment and Triage Thresholding.
     
     Args:
         criterion: Loss function to use for validation loss computation.
-                   If None, defaults to CrossEntropyLoss for standard reporting.
-                   Pass the training Focal Loss during training to align
-                   validation loss with the training loss landscape.
+        mel_threshold: Operating sensitivity threshold for melanoma triage.
+        logit_adjust: Strength of post-hoc Bayesian prior correction (0.0 to 1.0).
+        class_priors: Training set prior distribution array for Logit Adjustment.
     """
     model.eval()
     all_preds, all_targets, all_probs = [], [], []
@@ -193,14 +222,26 @@ def evaluate_dataset(model, loader, device, precision_dtype, has_cuda, criterion
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
 
+    log_priors = None
+    if logit_adjust > 0.0 and class_priors is not None:
+        p_tensor = torch.tensor(class_priors, dtype=torch.float32, device=device).clamp(min=1e-7)
+        log_priors = torch.log(p_tensor).unsqueeze(0)
+
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
             with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda else torch.nullcontext():
                 out = model(x)
                 loss = criterion(out, y)
-            probs = torch.softmax(out.float(), dim=1)
-            preds = out.argmax(dim=1)
+
+            # Apply Post-Hoc Logit Adjustment (Solution B)
+            if log_priors is not None:
+                adj_out = out.float() - float(logit_adjust) * log_priors
+            else:
+                adj_out = out.float()
+
+            probs = torch.softmax(adj_out, dim=1)
+            preds = adj_out.argmax(dim=1)
             all_probs.extend(probs.cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
             all_targets.extend(y.cpu().numpy())
@@ -257,6 +298,70 @@ def evaluate_dataset(model, loader, device, precision_dtype, has_cuda, criterion
         harmonized_5class_acc = float((shared_preds == shared_targets).mean())
     else:
         harmonized_5class_acc = float(report['accuracy'])
+
+    # 4. ── Melanoma Clinical Triage & Operating Threshold Evaluation ──
+    mel_operating_points = {}
+    total_mel = int(binary_mel_targets.sum())
+    for ref_th in [0.50, 0.30, 0.20, 0.15, 0.10, 0.05, 0.02]:
+        bin_p = (mel_probs >= ref_th).astype(int)
+        tp = int(np.sum((bin_p == 1) & (binary_mel_targets == 1)))
+        fn = int(np.sum((bin_p == 0) & (binary_mel_targets == 1)))
+        fp = int(np.sum((bin_p == 1) & (binary_mel_targets == 0)))
+        tn = int(np.sum((bin_p == 0) & (binary_mel_targets == 0)))
+        sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+        spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+        mel_operating_points[f"tau_{ref_th:.2f}"] = {
+            'threshold': ref_th,
+            'sensitivity': round(sens, 4),
+            'specificity': round(spec, 4),
+            'detected': f"{tp}/{total_mel}"
+        }
+
+    # Resolve specific operating threshold
+    effective_threshold = 0.15
+    if mel_threshold is not None:
+        if isinstance(mel_threshold, str):
+            mel_str = mel_threshold.lower().strip()
+            if mel_str in ('auto', 'youden'):
+                if len(np.unique(binary_mel_targets)) > 1:
+                    fpr_arr, tpr_arr, th_arr = roc_curve(binary_mel_targets, mel_probs)
+                    j_scores = tpr_arr - fpr_arr
+                    best_j_idx = np.argmax(j_scores)
+                    effective_threshold = float(th_arr[best_j_idx])
+                    effective_threshold = max(0.01, min(0.90, effective_threshold))
+                else:
+                    effective_threshold = 0.15
+            elif mel_str in ('sens90', 'sens_90', 'recall90'):
+                if len(np.unique(binary_mel_targets)) > 1:
+                    fpr_arr, tpr_arr, th_arr = roc_curve(binary_mel_targets, mel_probs)
+                    valid_idx = np.where(tpr_arr >= 0.90)[0]
+                    effective_threshold = float(th_arr[valid_idx[0]]) if len(valid_idx) > 0 else 0.10
+                else:
+                    effective_threshold = 0.10
+            elif mel_str in ('sens95', 'sens_95', 'recall95'):
+                if len(np.unique(binary_mel_targets)) > 1:
+                    fpr_arr, tpr_arr, th_arr = roc_curve(binary_mel_targets, mel_probs)
+                    valid_idx = np.where(tpr_arr >= 0.95)[0]
+                    effective_threshold = float(th_arr[valid_idx[0]]) if len(valid_idx) > 0 else 0.05
+                else:
+                    effective_threshold = 0.05
+            else:
+                try:
+                    effective_threshold = float(mel_threshold)
+                except ValueError:
+                    effective_threshold = 0.15
+        else:
+            effective_threshold = float(mel_threshold)
+
+    # Compute metrics at effective threshold
+    bin_preds = (mel_probs >= effective_threshold).astype(int)
+    tp = int(np.sum((bin_preds == 1) & (binary_mel_targets == 1)))
+    fn = int(np.sum((bin_preds == 0) & (binary_mel_targets == 1)))
+    fp = int(np.sum((bin_preds == 1) & (binary_mel_targets == 0)))
+    tn = int(np.sum((bin_preds == 0) & (binary_mel_targets == 0)))
+    triage_sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+    triage_spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+    triage_f1 = float(2 * tp / (2 * tp + fp + fn)) if (2 * tp + fp + fn) > 0 else 0.0
     
     return {
         'loss': v_loss / max(v_tot, 1),
@@ -270,6 +375,12 @@ def evaluate_dataset(model, loader, device, precision_dtype, has_cuda, criterion
         'macro_auc_roc': macro_auc_roc,
         'per_class_auc': per_class_auc,
         'harmonized_5class_acc': harmonized_5class_acc,
+        'mel_triage_recall': triage_sens,
+        'mel_triage_spec': triage_spec,
+        'mel_triage_f1': triage_f1,
+        'mel_triage_threshold': round(effective_threshold, 4),
+        'mel_triage_detected': f"{tp}/{total_mel}",
+        'mel_operating_points': mel_operating_points,
         'all_preds': all_preds,
         'all_targets': all_targets,
         'all_probs': all_probs,
@@ -336,13 +447,32 @@ def train_single_model(
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
 
+    balanced_sampling = getattr(args, 'balanced_sampling', False)
+    logit_adjust = float(getattr(args, 'logit_adjust', 0.0) or 0.0)
+    mixup_minority = float(getattr(args, 'mixup_minority', 0.0) or 0.0)
+    train_class_priors = compute_class_priors(train_df['dx'])
+
     train_ds = SkinDataset(train_df, transform=train_transform)
     ham_val_ds = SkinDataset(ham_val_df, transform=val_transform)
     pad_val_ds = SkinDataset(pad_val_df, transform=val_transform)
 
     num_workers = min(4, os.cpu_count() or 1)
     use_pin = (has_cuda and model_name != 'v5')
-    train_loader = DataLoader(train_ds, batch_size=micro_batch, shuffle=True, num_workers=num_workers, pin_memory=use_pin)
+
+    if balanced_sampling:
+        class_counts = train_df['dx'].value_counts().to_dict()
+        sample_weights = [1.0 / max(class_counts.get(dx, 1), 1) for dx in train_df['dx']]
+        sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+        train_loader = DataLoader(train_ds, batch_size=micro_batch, sampler=sampler, num_workers=num_workers, pin_memory=use_pin)
+        print("  ⚖️  Balanced Batch Sampling: ENABLED (WeightedRandomSampler)")
+    else:
+        train_loader = DataLoader(train_ds, batch_size=micro_batch, shuffle=True, num_workers=num_workers, pin_memory=use_pin)
+
+    if logit_adjust > 0.0:
+        print(f"  🎯 Logit Prior Adjustment: ENABLED (tau={logit_adjust:.2f})")
+    if mixup_minority > 0.0:
+        print(f"  🎨 Minority Class Mixup Augmentation: ENABLED (alpha={mixup_minority:.2f})")
+
     ham_val_loader = DataLoader(ham_val_ds, batch_size=micro_batch * 2, shuffle=False, num_workers=num_workers, pin_memory=use_pin)
     pad_val_loader = DataLoader(pad_val_ds, batch_size=micro_batch * 2, shuffle=False, num_workers=num_workers, pin_memory=use_pin)
 
@@ -378,18 +508,33 @@ def train_single_model(
         for step, (inputs, targets) in enumerate(pbar):
             inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
 
-            if has_cuda:
-                with torch.amp.autocast('cuda', dtype=precision_dtype):
-                    outputs = model(inputs)
-                    loss = criterion(outputs, targets) / grad_accum_steps
-                if use_scaler:
-                    scaler.scale(loss).backward()
+            if mixup_minority > 0.0 and model.training:
+                inputs_m, targets_a, targets_b, lam = mixup_data(inputs, targets, alpha=mixup_minority)
+                if has_cuda:
+                    with torch.amp.autocast('cuda', dtype=precision_dtype):
+                        outputs = model(inputs_m)
+                        loss = (lam * criterion(outputs, targets_a) + (1.0 - lam) * criterion(outputs, targets_b)) / grad_accum_steps
+                    if use_scaler:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
                 else:
+                    outputs = model(inputs_m)
+                    loss = (lam * criterion(outputs, targets_a) + (1.0 - lam) * criterion(outputs, targets_b)) / grad_accum_steps
                     loss.backward()
             else:
-                outputs = model(inputs)
-                loss = criterion(outputs, targets) / grad_accum_steps
-                loss.backward()
+                if has_cuda:
+                    with torch.amp.autocast('cuda', dtype=precision_dtype):
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets) / grad_accum_steps
+                    if use_scaler:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+                else:
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets) / grad_accum_steps
+                    loss.backward()
 
             if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(train_loader):
                 if use_scaler:
@@ -410,7 +555,10 @@ def train_single_model(
         train_acc = correct / total
         train_loss = total_loss / total
 
-        val_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion)
+        val_eval = evaluate_dataset(
+            model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion,
+            logit_adjust=logit_adjust, class_priors=train_class_priors
+        )
         val_acc, val_loss = val_eval['accuracy'], val_eval['loss']
         scheduler1.step(val_loss)
 
@@ -430,8 +578,8 @@ def train_single_model(
             torch.save(raw_model.state_dict(), model_dir / 'stage1_head_best.pth')
 
     # Intermediate Stage 1 benchmark
-    s1_ham_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda)
-    s1_pad_eval = evaluate_dataset(model, pad_val_loader, device, precision_dtype, has_cuda)
+    s1_ham_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda, logit_adjust=logit_adjust, class_priors=train_class_priors)
+    s1_pad_eval = evaluate_dataset(model, pad_val_loader, device, precision_dtype, has_cuda, logit_adjust=logit_adjust, class_priors=train_class_priors)
     print(f"\n[Stage 1 Complete] In-Domain (HAM) Acc: {s1_ham_eval['accuracy']:.2%} | OOD (PAD-UFES) Acc: {s1_pad_eval['accuracy']:.2%}\n")
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -467,18 +615,33 @@ def train_single_model(
         for step, (inputs, targets) in enumerate(pbar):
             inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
 
-            if has_cuda:
-                with torch.amp.autocast('cuda', dtype=precision_dtype):
-                    outputs = model(inputs)
-                    loss = criterion(outputs, targets) / grad_accum_steps
-                if use_scaler:
-                    scaler.scale(loss).backward()
+            if mixup_minority > 0.0 and model.training:
+                inputs_m, targets_a, targets_b, lam = mixup_data(inputs, targets, alpha=mixup_minority)
+                if has_cuda:
+                    with torch.amp.autocast('cuda', dtype=precision_dtype):
+                        outputs = model(inputs_m)
+                        loss = (lam * criterion(outputs, targets_a) + (1.0 - lam) * criterion(outputs, targets_b)) / grad_accum_steps
+                    if use_scaler:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
                 else:
+                    outputs = model(inputs_m)
+                    loss = (lam * criterion(outputs, targets_a) + (1.0 - lam) * criterion(outputs, targets_b)) / grad_accum_steps
                     loss.backward()
             else:
-                outputs = model(inputs)
-                loss = criterion(outputs, targets) / grad_accum_steps
-                loss.backward()
+                if has_cuda:
+                    with torch.amp.autocast('cuda', dtype=precision_dtype):
+                        outputs = model(inputs)
+                        loss = criterion(outputs, targets) / grad_accum_steps
+                    if use_scaler:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+                else:
+                    outputs = model(inputs)
+                    loss = criterion(outputs, targets) / grad_accum_steps
+                    loss.backward()
 
             if (step + 1) % grad_accum_steps == 0 or (step + 1) == len(train_loader):
                 if use_scaler:
@@ -501,7 +664,10 @@ def train_single_model(
         train_acc = correct / total
         train_loss = total_loss / total
 
-        val_eval = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion)
+        val_eval = evaluate_dataset(
+            model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion,
+            logit_adjust=logit_adjust, class_priors=train_class_priors
+        )
         val_acc, val_loss = val_eval['accuracy'], val_eval['loss']
         scheduler2.step(val_loss)
 
@@ -534,8 +700,13 @@ def train_single_model(
     print(f" 🏆 Running Final Dual-Domain Benchmark Evaluation on {model_name.upper()}")
     print(f"{'='*80}\n")
 
+    mel_th = getattr(args, 'mel_threshold', None)
+
     # 1. In-Domain Evaluation (HAM10000)
-    ham_results = evaluate_dataset(model, ham_val_loader, device, precision_dtype, has_cuda)
+    ham_results = evaluate_dataset(
+        model, ham_val_loader, device, precision_dtype, has_cuda,
+        mel_threshold=mel_th, logit_adjust=logit_adjust, class_priors=train_class_priors
+    )
     ham_dir = model_dir / 'ham10000'
     ham_dir.mkdir(parents=True, exist_ok=True)
     with open(ham_dir / 'classification_report.json', 'w') as f:
@@ -546,7 +717,11 @@ def train_single_model(
     generate_gradcam_gallery(model=model, val_df=ham_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=ham_dir / 'gradcam_heatmaps.png', model_name=f"{model_name}_HAM", device=device)
 
     # 2. Out-of-Domain Evaluation (PAD-UFES-20)
-    pad_results = evaluate_dataset(model, pad_val_loader, device, precision_dtype, has_cuda)
+    calibrated_th = ham_results['mel_triage_threshold']
+    pad_results = evaluate_dataset(
+        model, pad_val_loader, device, precision_dtype, has_cuda,
+        mel_threshold=calibrated_th, logit_adjust=logit_adjust, class_priors=train_class_priors
+    )
     pad_dir = model_dir / 'pad_ufes_20'
     pad_dir.mkdir(parents=True, exist_ok=True)
     with open(pad_dir / 'classification_report.json', 'w') as f:
@@ -575,6 +750,10 @@ def train_single_model(
         'img_size': img_size,
         'batch_size': args.batch_size,
         'params': sum(p.numel() for p in model.parameters()),
+        'mel_triage_threshold': calibrated_th,
+        'balanced_sampling': balanced_sampling,
+        'logit_adjust': logit_adjust,
+        'mixup_minority': mixup_minority,
 
         # Stage 1 Benchmarks
         'stage1_ham_accuracy': s1_ham_eval['accuracy'],
@@ -590,6 +769,9 @@ def train_single_model(
         'ham_mel_auc_roc': ham_results['mel_auc_roc'],
         'ham_macro_auc_roc': ham_results['macro_auc_roc'],
         'ham_harmonized_5class_acc': ham_results['harmonized_5class_acc'],
+        'ham_mel_triage_recall': ham_results['mel_triage_recall'],
+        'ham_mel_triage_spec': ham_results['mel_triage_spec'],
+        'ham_mel_operating_points': ham_results['mel_operating_points'],
 
         # Stage 2 Out-of-Domain PAD-UFES-20 Metrics
         'pad_accuracy': pad_results['accuracy'],
@@ -601,6 +783,10 @@ def train_single_model(
         'pad_mel_auc_roc': pad_results['mel_auc_roc'],
         'pad_macro_auc_roc': pad_results['macro_auc_roc'],
         'pad_harmonized_5class_acc': pad_results['harmonized_5class_acc'],
+        'pad_mel_triage_recall': pad_results['mel_triage_recall'],
+        'pad_mel_triage_spec': pad_results['mel_triage_spec'],
+        'pad_mel_triage_detected': pad_results['mel_triage_detected'],
+        'pad_mel_operating_points': pad_results['mel_operating_points'],
 
         # Clinical Domain Shift Drop (In-Domain - Out-of-Domain)
         'domain_gap': float(domain_gap),
@@ -612,8 +798,12 @@ def train_single_model(
 
     print(f"\n===========================================================================")
     print(f" 📊 Final Results Summary for {model_name.upper()}:")
-    print(f"   In-Domain (HAM10000):   Accuracy={ham_results['accuracy']:.2%} | Weighted F1={ham_results['weighted_avg_f1']:.4f} | Mel Recall={ham_results['mel_recall']:.2%} | Mel AUC-ROC={ham_results['mel_auc_roc']:.4f}")
-    print(f"   Out-of-Domain (PAD-UFES): Accuracy={pad_results['accuracy']:.2%} | Weighted F1={pad_results['weighted_avg_f1']:.4f} | Mel Recall={pad_results['mel_recall']:.2%} | Mel AUC-ROC={pad_results['mel_auc_roc']:.4f}")
+    print(f"   In-Domain (HAM10000):     Acc={ham_results['accuracy']:.2%} | Macro AUC={ham_results['macro_auc_roc']:.4f} | Mel AUC={ham_results['mel_auc_roc']:.4f}")
+    print(f"     ↳ Argmax Mel Recall:    {ham_results['mel_recall']:.2%}")
+    print(f"     ↳ Triage (tau={calibrated_th:.2f}):    Mel Recall={ham_results['mel_triage_recall']:.2%} | Spec={ham_results['mel_triage_spec']:.2%}")
+    print(f"   Out-of-Domain (PAD-UFES): Acc={pad_results['accuracy']:.2%} | Macro AUC={pad_results['macro_auc_roc']:.4f} | Mel AUC={pad_results['mel_auc_roc']:.4f}")
+    print(f"     ↳ Argmax Mel Recall:    {pad_results['mel_recall']:.2%}")
+    print(f"     ↳ Triage (tau={calibrated_th:.2f}):    Mel Recall={pad_results['mel_triage_recall']:.2%} | Spec={pad_results['mel_triage_spec']:.2%} | Detected={pad_results['mel_triage_detected']}")
     print(f"   Clinical Domain Gap (Δ Acc Drop): -{domain_gap*100:.2f}%")
     print(f"   Results saved to: {model_dir / 'results.json'}")
     print(f"   Domain Comparison Chart: {model_dir / 'domain_comparison.png'}")

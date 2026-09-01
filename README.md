@@ -102,67 +102,77 @@ To reconcile 7-class deep representation learning with clinical screening and tr
 
 ---
 
-## 🚀 Quickstart & Setup
+## 🚀 Quickstart & Unified CLI Benchmark Runner (`main.py`)
 
-### 1. Create Virtual Environment & Install Dependencies
+The pipeline features a unified CLI entrypoint [`main.py`](file:///home/lkm20/TCC/main.py) with dynamic scenario loading from [`benchmark_scenarios.json`](file:///home/lkm20/TCC/benchmark_scenarios.json), automatic hardware environment detection, date-versioned directory isolation, and global archive indexing.
 
-```bash
-# Create and activate environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# Install dependencies
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-### 2. Run Pre-Configured Benchmark Scenarios (`Maximum -> Medium -> Low`)
-
-Run the complete multi-scenario suite with automatic resume and dual-domain AUC-ROC tracking:
+### 1. Benchmark Execution Examples
 
 ```bash
-# Run all scenarios with unbuffered output (-u) for real-time logging
-nohup .venv/bin/python -u run_scenarios.py --scenario all > scenarios_benchmark.log 2>&1 &
+# Run the complete benchmark on all 5 MobileNet generations under the Standard scenario
+python main.py --scenario standard --model all
 
-# Monitor the logs in real-time
-tail -f scenarios_benchmark.log
-```
+# Train only MobileNet V5 with Balanced Batch Sampling and Youden Threshold Calibration
+python main.py --scenario standard --model v5 --balanced-sampling --mel-threshold youden
 
-Or run a specific tier / subset of models:
+# Train MobileNet V4 with Logit Adjustment and Minority Mixup
+python main.py --scenario medium --model v4 --logit-adjust 1.0 --mixup-minority 0.2
 
-```bash
-# Run only Medium scenario on V1, V4, and V5
-.venv/bin/python run_scenarios.py --scenario medium --models v1 v4 v5
+# Custom Fast Exploration Run
+python main.py --scenario low --model v3 --epochs 15 --batch-size 32 --mel-threshold 0.15
 ```
 
 ---
 
-## 🏋️ Single Model Training
+## 🛠️ Complete CLI Options & Parameters Reference (`main.py --help`)
 
-Train any individual model directly with custom hyperparameters:
+| Parameter | Type / Choices | Default | Description |
+| :--- | :--- | :---: | :--- |
+| `--model` | `v1, v2, v3, v4, v5, all` | `v1` | Model generation architecture to train, or `all` to benchmark all 5 generations. |
+| `--scenario` | `standard, medium, low, maximum, custom` | `standard` | Preset from `benchmark_scenarios.json`. |
+| `--scenarios-file` | `str` | `benchmark_scenarios.json` | Path to benchmark scenarios configuration JSON file. |
+| `--session-dir` | `str` | `experiments/<DD_MM_YYYY>` | Custom date/session output directory. |
+| `--epochs` | `int` | *from scenario* | Max epochs for Stage 2 (overrides scenario preset). |
+| `--patience` | `int` | *from scenario* | Early stopping patience (overrides scenario preset). |
+| `--batch-size` | `int` | *from scenario* | Target effective batch size (adaptive micro-batching). |
+| `--lr-stage1` | `float` | *model default* | Stage 1 warmup learning rate (Head only). |
+| `--lr-stage2` | `float` | *model default* | Stage 2 fine-tuning learning rate (Backbone). |
+| `--mel-threshold` | `float, auto, youden, sens90, sens95` | `0.15` | Operating threshold for Melanoma clinical triage. CLI always overrides JSON. |
+| `--balanced-sampling`| *flag* | `False` | Enables `WeightedRandomSampler` to eliminate 67% Nevus mini-batch dominance. |
+| `--logit-adjust` | `float` | `0.0` | Post-hoc Bayesian logit adjustment strength $\tau$ (*ICLR 2021*) to strip prior bias. |
+| `--mixup-minority` | `float` | `0.0` | Beta-distribution $\alpha$ parameter for synthetic minority class Mixup. |
+| `--val-dataset` | `ham10000, pad-ufes-20, both` | `both` | Target validation evaluation scope. |
+| `--seed` | `int` | `42` | Global random seed for PyTorch, NumPy, and CUDA. |
 
-```bash
-# MobileNet V1
-.venv/bin/python train_timm_models.py --model v1 --epochs 30 --batch-size 32
+---
 
-# MobileNet V4 Conv-Medium
-.venv/bin/python train_timm_models.py --model v4 --epochs 30 --batch-size 32
+## ⚖️ Class Imbalance Mitigation Suite (Long-Tail Learning)
 
-# MobileNet V5 (300M Gemma3n)
-.venv/bin/python train_timm_models.py --model v5 --epochs 30 --batch-size 32
+To combat the severe 67% Nevus dominance in HAM10000 and the 37% BCC / 2.3% Melanoma distribution shift in PAD-UFES-20, three modular solutions are integrated:
+
+```text
+┌───────────────────────────────────────┬───────────────────────────────────────┬───────────────────────────────────────┐
+│ 1. Balanced Batch Sampling (Sol. A)   │ 2. Post-Hoc Logit Adjustment (Sol. B) │ 3. Minority Mixup Augmentation (Sol. C)│
+├───────────────────────────────────────┼───────────────────────────────────────┼───────────────────────────────────────┤
+│ Flag: --balanced-sampling             │ Flag: --logit-adjust 1.0              │ Flag: --mixup-minority 0.2            │
+│ Samples each class with equal ~14.3%  │ Strips dataset prior penalty:         │ Interpolates rare malignant lesions   │
+│ probability per mini-batch.           │ z_adj = z - tau * log(pi)             │ with diverse skin contexts.           │
+└───────────────────────────────────────┴───────────────────────────────────────┴───────────────────────────────────────┘
 ```
 
 ---
 
 ## 📊 Visual & Analytical Artifacts Generated
 
-Each benchmark execution automatically generates comprehensive clinical evaluation artifacts:
+Each benchmark execution automatically compiles comprehensive clinical evaluation artifacts:
 
 - **`roc_curves_dual_domain.png`**: Side-by-side comparative ROC analysis contrasting in-domain (HAM10000 dermoscopy) against out-of-domain (PAD-UFES-20 smartphone) discrimination.
 - **`roc_curves.png`**: Multi-class One-vs-Rest ROC curves with per-class AUC-ROC and highlighted Melanoma triage curve.
 - **`domain_comparison.png`**: Side-by-side comparative bar chart tracking Accuracy, F1, Melanoma Recall, Melanoma AUC-ROC, and Macro AUC.
 - **`confusion_matrix.png`**: Dual matrices showing raw sample counts and row-normalized sensitivity percentages.
 - **`per_class_metrics.png`**: Diagnostic Precision, Recall, and F1-score breakdown per class.
-- **`gradcam_heatmaps.png`**: 3-column CNN attention gallery (Original Image, Heatmap, Superimposed Overlay).
+- **`gradcam_heatmaps.png`**: Multi-column attention gallery (Grad-CAM for V1–V4, Jacob Gil MSFA LayerCAM for V5).
 - **`training_curves.png`**: Multi-stage loss and accuracy trajectory over training epochs.
-- **`results.json` & `classification_report.json`**: Exact numerical scores including `mel_auc_roc`, `macro_auc_roc`, `harmonized_5class_acc`, and per-class sensitivities.
+- **`results.json` & `classification_report.json`**: Exact numerical scores including `mel_auc_roc`, `macro_auc_roc`, `mel_triage_recall`, `pad_mel_triage_detected`, and per-class metrics.
+- **`master_leaderboard.csv` & `SUMMARY.md`**: Automatically maintained leaderboard ranking all models by OOD accuracy and calibrated triage sensitivity.
+

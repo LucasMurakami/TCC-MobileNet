@@ -5,6 +5,10 @@
       "description": "20 Epochs, Patience 4, efficient convergence check balancing training throughput and high accuracy.",
       "priority": 1,
       "optional": false,
+      "mel_threshold": "youden",
+      "balanced_sampling": true,
+      "logit_adjust": 1.0,
+      "mixup_minority": 0.2,
       "models": {
         "v1": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
         "v2": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
@@ -18,6 +22,10 @@
       "description": "30 Epochs, Patience 5, optimal compute-to-accuracy ratio for standard evaluation.",
       "priority": 2,
       "optional": false,
+      "mel_threshold": "youden",
+      "balanced_sampling": true,
+      "logit_adjust": 1.0,
+      "mixup_minority": 0.2,
       "models": {
         "v1": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
         "v2": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
@@ -31,6 +39,10 @@
       "description": "15 Epochs, Patience 3, rapid baseline profiling for lightweight execution.",
       "priority": 3,
       "optional": false,
+      "mel_threshold": "youden",
+      "balanced_sampling": true,
+      "logit_adjust": 1.0,
+      "mixup_minority": 0.2,
       "models": {
         "v1": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
         "v2": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
@@ -44,6 +56,10 @@
       "description": "50 Epochs, Patience 8, deep fine-tuning for SOTA convergence (optional, excluded from default batch runs).",
       "priority": 4,
       "optional": true,
+      "mel_threshold": "youden",
+      "balanced_sampling": true,
+      "logit_adjust": 1.0,
+      "mixup_minority": 0.2,
       "models": {
         "v1": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
         "v2": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
