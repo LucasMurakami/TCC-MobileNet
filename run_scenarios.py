@@ -78,84 +78,19 @@ def resolve_session_directory(root_dir: Path, session_id: str = None, resume: bo
         return base_date, base_dir
 
 
+from main import update_session_leaderboard, update_global_archive_index
+
+
 def is_experiment_completed(exp_dir: Path) -> bool:
     """Check if experiment finished and produced valid results."""
     res_file = exp_dir / 'results.json'
-    cfg_file = exp_dir / 'config.json'
-    return res_file.exists() and cfg_file.exists() and res_file.stat().st_size > 10
+    nested_res = exp_dir / exp_dir.name / 'results.json'
+    return (res_file.exists() and res_file.stat().st_size > 10) or (nested_res.exists() and nested_res.stat().st_size > 10)
 
 
 def update_master_leaderboard(session_dir: Path, new_entry: dict = None):
-    """Update session master leaderboard CSV and markdown summary table."""
-    leaderboard_csv = session_dir / 'master_leaderboard.csv'
-    if new_entry is not None:
-        if leaderboard_csv.exists():
-            df = pd.read_csv(leaderboard_csv)
-            df = df[df['experiment_id'] != new_entry['experiment_id']]
-            df = pd.concat([df, pd.DataFrame([new_entry])], ignore_index=True)
-        else:
-            df = pd.DataFrame([new_entry])
-
-        scenario_order = {'standard': 1, 'medium': 2, 'low': 3, 'maximum': 4}
-        model_order = {'v1': 1, 'v2': 2, 'v3': 3, 'v3small': 3, 'v3large': 3, 'v4': 4, 'v4conv': 4, 'v4convl': 4, 'v5': 5}
-
-        df['_scenario_rank'] = df['scenario'].map(lambda x: scenario_order.get(str(x).lower(), 99))
-        df['_model_rank'] = df['model'].map(lambda x: model_order.get(str(x).lower(), 99))
-
-        sort_cols = ['_scenario_rank', '_model_rank']
-        ascending = [True, True]
-
-        if 'ham_mel_recall' in df.columns:
-            sort_cols.append('ham_mel_recall')
-            ascending.append(False)
-        if 'mel_recall' in df.columns:
-            sort_cols.append('mel_recall')
-            ascending.append(False)
-
-        df.sort_values(by=sort_cols, ascending=ascending, inplace=True)
-        df.drop(columns=['_scenario_rank', '_model_rank'], inplace=True, errors='ignore')
-        df.to_csv(leaderboard_csv, index=False)
-    elif leaderboard_csv.exists():
-        df = pd.read_csv(leaderboard_csv)
-        scenario_order = {'standard': 1, 'medium': 2, 'low': 3, 'maximum': 4}
-        model_order = {'v1': 1, 'v2': 2, 'v3': 3, 'v3small': 3, 'v3large': 3, 'v4': 4, 'v4conv': 4, 'v4convl': 4, 'v5': 5}
-
-        df['_scenario_rank'] = df['scenario'].map(lambda x: scenario_order.get(str(x).lower(), 99))
-        df['_model_rank'] = df['model'].map(lambda x: model_order.get(str(x).lower(), 99))
-
-        sort_cols = ['_scenario_rank', '_model_rank']
-        ascending = [True, True]
-
-        if 'ham_mel_recall' in df.columns:
-            sort_cols.append('ham_mel_recall')
-            ascending.append(False)
-        if 'mel_recall' in df.columns:
-            sort_cols.append('mel_recall')
-            ascending.append(False)
-
-        df.sort_values(by=sort_cols, ascending=ascending, inplace=True)
-        df.drop(columns=['_scenario_rank', '_model_rank'], inplace=True, errors='ignore')
-    else:
-        return
-
-    summary_md = session_dir / 'SUMMARY.md'
-    with open(summary_md, 'w') as f:
-        f.write(f"# 🏆 Skin Lesion Benchmark: Session Leaderboard ({session_dir.name})\n\n")
-        f.write(f"*Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*\n\n")
-        f.write("### 📊 Top Performing Hyperparameter Configurations (Dual-Domain)\n\n")
-
-        cols = [
-            'scenario', 'model',
-            'ham_accuracy', 'accuracy', 'domain_gap',
-            'ham_mel_auc_roc', 'mel_auc_roc',
-            'ham_mel_recall', 'mel_recall',
-            'ham_weighted_f1', 'weighted_avg_f1',
-            'epochs', 'lr_stage2', 'patience', 'seed'
-        ]
-        available_cols = [c for c in cols if c in df.columns]
-        display_df = df[available_cols].copy()
-        f.write(display_df.to_markdown(index=False))
-        f.write("\n\n---\n")
+    """Update session master leaderboard CSV and markdown summary table using the unified main engine."""
+    return update_session_leaderboard(session_dir)
 
 
 def update_global_archive_index(root_dir: Path):
@@ -245,27 +180,27 @@ def main():
     ham_val_csv = root_dir / 'ham_val_df.csv'
     pad_val_csv = root_dir / 'pad_val_df.csv'
 
-    if not (train_csv.exists() and ham_val_csv.exists() and pad_val_csv.exists()):
-        print("\n  [Setup] Initializing stratified training & dual validation datasets...")
-        from dataset import prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
-        t_df, h_df = prepare_dataset(cache_root=data_cache, prepared_dir=prepared_dir, random_state=42)
-        pad_dir = ensure_pad_ufes20_download(data_cache)
-        p_df = load_pad_ufes20_validation(pad_dir)
+    # Session-isolated zero-leakage datasets
+    from dataset import prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
+    pad_dir = ensure_pad_ufes20_download(data_cache)
 
+    if not (session_dir / 'train_df.csv').exists() or not (session_dir / 'ham_val_df.csv').exists():
+        print("\n  [Setup] Initializing zero-leakage lesion-grouped training & validation splits...")
+        t_df, h_df = prepare_dataset(cache_root=data_cache, prepared_dir=prepared_dir, random_state=42, oversample=False)
+        t_df.to_csv(session_dir / 'train_df.csv', index=False)
+        h_df.to_csv(session_dir / 'ham_val_df.csv', index=False)
+        # Also refresh root cache
         t_df.to_csv(train_csv, index=False)
         h_df.to_csv(ham_val_csv, index=False)
+
+    if not (session_dir / 'pad_val_df.csv').exists():
+        p_df = load_pad_ufes20_validation(pad_dir)
+        p_df.to_csv(session_dir / 'pad_val_df.csv', index=False)
         p_df.to_csv(pad_val_csv, index=False)
 
-    # Copy split info into session folder for permanent record
-    if not (session_dir / 'train_df.csv').exists():
-        t_df = pd.read_csv(train_csv)
-        t_df.to_csv(session_dir / 'train_df.csv', index=False)
-    if not (session_dir / 'ham_val_df.csv').exists():
-        h_df = pd.read_csv(ham_val_csv)
-        h_df.to_csv(session_dir / 'ham_val_df.csv', index=False)
-    if not (session_dir / 'pad_val_df.csv').exists():
-        p_df = pd.read_csv(pad_val_csv)
-        p_df.to_csv(session_dir / 'pad_val_df.csv', index=False)
+    train_csv = session_dir / 'train_df.csv'
+    ham_val_csv = session_dir / 'ham_val_df.csv'
+    pad_val_csv = session_dir / 'pad_val_df.csv'
 
     print(f"\n{'='*85}")
     print(f" 🔬 Thesis Scenario Runner Initialized (Session: {session_name})")
@@ -297,9 +232,12 @@ def main():
             seed = cfg['seed']
 
             mel_threshold = cfg.get('mel_threshold', s_info.get('mel_threshold', 'youden'))
+            bcc_threshold = cfg.get('bcc_threshold', s_info.get('bcc_threshold', 'youden'))
             balanced_sampling = cfg.get('balanced_sampling', s_info.get('balanced_sampling', True))
-            logit_adjust = float(cfg.get('logit_adjust', s_info.get('logit_adjust', 1.0)) or 0.0)
+            logit_adjust = float(cfg.get('logit_adjust', s_info.get('logit_adjust', 0.0)) or 0.0)
             mixup_minority = float(cfg.get('mixup_minority', s_info.get('mixup_minority', 0.2)) or 0.0)
+            use_tta = cfg.get('use_tta', s_info.get('use_tta', True))
+            color_constancy = cfg.get('color_constancy', s_info.get('color_constancy', False))
 
             exp_id = f"{s_key}_{model_name}_ep{epochs}_bs{bs}_lr2_{lr2}_pat{pat}_seed{seed}"
             exp_dir = session_dir / 'scenarios' / s_key / model_name
@@ -363,6 +301,12 @@ def main():
                 cmd.extend(['--mixup-minority', str(mixup_minority)])
             if mel_threshold is not None:
                 cmd.extend(['--mel-threshold', str(mel_threshold)])
+            if bcc_threshold is not None:
+                cmd.extend(['--bcc-threshold', str(bcc_threshold)])
+            if use_tta:
+                cmd.append('--use-tta')
+            if color_constancy:
+                cmd.append('--color-constancy')
 
             t0 = time.perf_counter()
             try:
@@ -386,29 +330,38 @@ def main():
 
                 duration = time.perf_counter() - t0
 
-                # Reorganize model output files cleanly
+                # Reorganize nested model directory if created
                 sub_model_dir = exp_dir / model_name
-                if sub_model_dir.exists():
-                    for p in sub_model_dir.glob('*'):
-                        p.rename(exp_dir / p.name)
+                if sub_model_dir.exists() and (sub_model_dir / 'results.json').exists():
+                    import shutil
+                    for p in list(sub_model_dir.glob('*')):
+                        target_p = exp_dir / p.name
+                        if target_p.exists():
+                            if target_p.is_dir():
+                                shutil.rmtree(target_p)
+                            else:
+                                target_p.unlink()
+                        shutil.move(str(p), str(target_p))
                     try:
                         sub_model_dir.rmdir()
                     except Exception:
                         pass
 
                 results_path = exp_dir / 'results.json'
+                if not results_path.exists() and (exp_dir / model_name / 'results.json').exists():
+                    results_path = exp_dir / model_name / 'results.json'
 
                 if results_path.exists():
                     with open(results_path) as f:
                         res_data = json.load(f)
 
-                    ham_acc = res_data.get('ham_accuracy', 0.0)
-                    pad_acc = res_data.get('accuracy', 0.0)
-                    ham_w_f1 = res_data.get('ham_weighted_f1', 0.0)
-                    pad_w_f1 = res_data.get('weighted_avg_f1', 0.0)
-                    ham_mel_auc = res_data.get('ham_mel_auc_roc', 0.0)
-                    pad_mel_auc = res_data.get('pad_mel_auc_roc', res_data.get('mel_auc_roc', 0.0))
-                    gap = res_data.get('domain_gap_drop', 0.0)
+                    ham_acc = float(res_data.get('ham_accuracy', 0.0))
+                    pad_acc = float(res_data.get('pad_accuracy', res_data.get('accuracy', 0.0)))
+                    ham_w_f1 = float(res_data.get('ham_weighted_f1', 0.0))
+                    pad_w_f1 = float(res_data.get('pad_weighted_f1', res_data.get('weighted_avg_f1', 0.0)))
+                    ham_mel_auc = float(res_data.get('ham_mel_auc_roc', 0.0))
+                    pad_mel_auc = float(res_data.get('pad_mel_auc_roc', res_data.get('mel_auc_roc', 0.0)))
+                    gap = float(res_data.get('domain_gap_drop', res_data.get('domain_gap', ham_acc - pad_acc)))
 
                     print(f"  ✅ [SUCCESS] In-Domain: Acc={ham_acc:.2%}, Mel AUC={ham_mel_auc:.4f} | Out-of-Domain: Acc={pad_acc:.2%}, Mel AUC={pad_mel_auc:.4f} | Domain Gap: -{gap*100:.2f}% | Duration: {duration/60:.1f} min")
 

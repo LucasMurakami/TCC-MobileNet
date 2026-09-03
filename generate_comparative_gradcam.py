@@ -28,8 +28,18 @@ MODEL_CONFIGS = {
     'v5': {'timm_name': 'mobilenetv5_300m.gemma3n', 'input_size': 256, 'display_name': 'MobileNet V5 (MSFA LayerCAM)'},
 }
 
-session_dir = Path('experiments/30_08_2026')
-scenario = 'standard'
+import argparse
+
+parser = argparse.ArgumentParser(description='Generate Comparative Grad-CAM / LayerCAM Visualizations')
+parser.add_argument('--session-dir', type=str, default='experiments/01_09_2026' if Path('experiments/01_09_2026').exists() else 'experiments/30_08_2026')
+parser.add_argument('--scenario', type=str, default='standard')
+parser.add_argument('--target-mode', type=str, default='pred', choices=['pred', 'true', 'contrastive', 'mel', 'bcc'],
+                    help='Class targeting mode for Grad-CAM (pred, true, contrastive, mel, bcc)')
+cli_args, _ = parser.parse_known_args()
+
+session_dir = Path(cli_args.session_dir)
+scenario = cli_args.scenario
+target_mode = cli_args.target_mode
 models = ['v1', 'v2', 'v3', 'v4', 'v5']
 
 ham_df = pd.read_csv(session_dir / 'ham_val_df.csv')
@@ -79,7 +89,13 @@ for m_name in models:
     for s_list in [ham_samples, pad_samples]:
         for s in s_list:
             t_in = transform(s['pil_img']).unsqueeze(0).to(device)
-            heatmap, probs = cam_engine(t_in)
+            target_cls_idx = None
+            if target_mode == 'true':
+                target_cls_idx = CLASS_NAMES.index(s['true_cls'])
+            elif target_mode in CLASS_NAMES:
+                target_cls_idx = CLASS_NAMES.index(target_mode)
+
+            heatmap, probs = cam_engine(t_in, target_class=target_cls_idx)
             pred_idx = int(np.argmax(probs))
             pred_cls = CLASS_NAMES[pred_idx]
             conf = float(probs[pred_idx])
@@ -95,6 +111,7 @@ for m_name in models:
     if m_name == 'v5':
         v5_dir = session_dir / 'scenarios' / scenario / 'v5'
         print("Regenerating V5 individual galleries...", flush=True)
+        gallery_mode = target_mode if target_mode in ('pred', 'true', 'contrastive') else 'pred'
         generate_gradcam_gallery(
             model=m,
             val_df=ham_df,
@@ -102,7 +119,8 @@ for m_name in models:
             img_size=img_size,
             output_path=v5_dir / 'ham10000' / 'gradcam_heatmaps.png',
             model_name='v5',
-            device=device
+            device=device,
+            target_mode=gallery_mode
         )
         generate_gradcam_gallery(
             model=m,
@@ -111,7 +129,8 @@ for m_name in models:
             img_size=img_size,
             output_path=v5_dir / 'pad_ufes_20' / 'gradcam_heatmaps.png',
             model_name='v5',
-            device=device
+            device=device,
+            target_mode=gallery_mode
         )
         generate_gradcam_gallery(
             model=m,
@@ -120,7 +139,8 @@ for m_name in models:
             img_size=img_size,
             output_path=v5_dir / 'gradcam_heatmaps.png',
             model_name='v5',
-            device=device
+            device=device,
+            target_mode=gallery_mode
         )
 
     cam_engine.remove_hooks()

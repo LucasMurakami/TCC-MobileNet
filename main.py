@@ -166,6 +166,12 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
                 'pad_triage_sens': round(float(data.get('pad_mel_triage_recall', data.get('pad_mel_recall', 0.0))), 4),
                 'ham_mel_recall': round(float(data.get('ham_mel_recall', 0.0)), 4),
                 'mel_recall': round(float(data.get('pad_mel_recall', 0.0)), 4),
+                'bcc_th': round(float(data.get('bcc_triage_threshold', 0.15)), 2) if data.get('bcc_triage_threshold') is not None else 0.15,
+                'ham_bcc_triage_sens': round(float(data.get('ham_bcc_triage_recall', data.get('ham_bcc_recall', 0.0))), 4),
+                'pad_bcc_triage_sens': round(float(data.get('pad_bcc_triage_recall', data.get('pad_bcc_recall', 0.0))), 4),
+                'ham_bcc_recall': round(float(data.get('ham_bcc_recall', 0.0)), 4),
+                'bcc_recall': round(float(data.get('pad_bcc_recall', 0.0)), 4),
+                'pad_mal_screen_sens': round(float(data.get('pad_malignant_triage_recall', 0.0)), 4) if data.get('pad_malignant_triage_recall') is not None else None,
                 'ham_weighted_f1': round(float(data.get('ham_weighted_f1', 0.0)), 4),
                 'weighted_avg_f1': round(float(data.get('pad_weighted_f1', 0.0)), 4),
             })
@@ -295,12 +301,20 @@ def parse_args():
     parser.add_argument('--val-dataset', type=str, default='both', choices=['ham10000', 'pad-ufes-20', 'both'])
     parser.add_argument('--mel-threshold', type=str, default=None,
                         help="Operating sensitivity threshold for melanoma triage (e.g. 0.15, 'auto', 'youden', 'sens90', 'sens95'). CLI always overrides benchmark_scenarios.json.")
+    parser.add_argument('--bcc-threshold', type=str, default=None,
+                        help="Operating sensitivity threshold for Basal Cell Carcinoma (BCC) triage (e.g. 'youden', 'auto', 'sens90', 'sens95', or float like 0.15). CLI always overrides benchmark_scenarios.json.")
+    parser.add_argument('--malignant-threshold', type=str, default=None,
+                        help="Operating threshold for joint malignancy screening (MEL + BCC + AKIEC). Default: None.")
     parser.add_argument('--balanced-sampling', action='store_true', default=False,
                         help="Enable class-balanced mini-batch sampling via WeightedRandomSampler (eliminates 67%% Nevus gradient dominance).")
     parser.add_argument('--logit-adjust', type=float, default=None,
                         help="Post-hoc Bayesian logit adjustment strength tau (e.g. 1.0) to cancel training prior penalty on minority classes.")
     parser.add_argument('--mixup-minority', type=float, default=None,
                         help="Beta-distribution alpha parameter (e.g. 0.2) for minority class Mixup data augmentation.")
+    parser.add_argument('--use-tta', action='store_true', default=False,
+                        help="Enable 4-view Test-Time Augmentation (orig, hflip, vflip, rot90) during evaluation.")
+    parser.add_argument('--color-constancy', action='store_true', default=False,
+                        help="Enable Shades-of-Gray Minkowski color constancy transform to standardize cross-domain illumination.")
     parser.add_argument('--output-dir', type=str, default=None, help='Custom output directory (overrides auto-session)')
     parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
     return parser.parse_args()
@@ -351,8 +365,8 @@ def main():
         train_df = pd.read_csv(session_dir / 'train_df.csv')
         ham_val_df = pd.read_csv(session_dir / 'ham_val_df.csv')
     else:
-        print("[dataset] Preparing HAM10000 dataset...")
-        train_df, ham_val_df = prepare_dataset(data_cache, prepared_dir, random_state=base_seed)
+        print("[dataset] Preparing HAM10000 dataset (zero-leakage patient-grouped split)...")
+        train_df, ham_val_df = prepare_dataset(data_cache, prepared_dir, random_state=base_seed, oversample=not args.balanced_sampling)
         train_df.to_csv(session_dir / 'train_df.csv', index=False)
         ham_val_df.to_csv(session_dir / 'ham_val_df.csv', index=False)
 
@@ -404,6 +418,26 @@ def main():
         else:
             model_args.mel_threshold = 0.15
 
+        # Basal Cell Carcinoma (BCC) Triage Threshold Resolution: CLI argument > model JSON > scenario JSON > default 'youden'
+        if args.bcc_threshold is not None:
+            model_args.bcc_threshold = args.bcc_threshold
+        elif 'bcc_threshold' in m_cfg:
+            model_args.bcc_threshold = m_cfg['bcc_threshold']
+        elif 'bcc_threshold' in scenario_cfg:
+            model_args.bcc_threshold = scenario_cfg['bcc_threshold']
+        else:
+            model_args.bcc_threshold = 'youden'
+
+        # Malignant Screening Threshold Resolution: CLI argument > model JSON > scenario JSON > default None
+        if args.malignant_threshold is not None:
+            model_args.malignant_threshold = args.malignant_threshold
+        elif 'malignant_threshold' in m_cfg:
+            model_args.malignant_threshold = m_cfg['malignant_threshold']
+        elif 'malignant_threshold' in scenario_cfg:
+            model_args.malignant_threshold = scenario_cfg['malignant_threshold']
+        else:
+            model_args.malignant_threshold = None
+
         # Long-Tail Learning Resolutions (CLI flag > model JSON > scenario JSON > default)
         if args.balanced_sampling:
             model_args.balanced_sampling = True
@@ -432,10 +466,14 @@ def main():
         else:
             model_args.mixup_minority = 0.0
 
+        model_args.use_tta = args.use_tta or m_cfg.get('use_tta', False) or scenario_cfg.get('use_tta', False)
+        model_args.color_constancy = args.color_constancy or m_cfg.get('color_constancy', False) or scenario_cfg.get('color_constancy', False)
+
         print(f"\n⚙️  Configuring {m.upper()} from scenario '{args.scenario}': "
               f"epochs={model_args.epochs}, patience={model_args.patience}, batch_size={model_args.batch_size}, "
-              f"lr1={model_args.lr_stage1}, lr2={model_args.lr_stage2}, mel_threshold={model_args.mel_threshold}, "
-              f"balanced_sampling={model_args.balanced_sampling}, logit_adjust={model_args.logit_adjust}, mixup={model_args.mixup_minority}")
+              f"lr1={model_args.lr_stage1}, lr2={model_args.lr_stage2}, mel_th={model_args.mel_threshold}, bcc_th={model_args.bcc_threshold}, "
+              f"balanced_sampling={model_args.balanced_sampling}, logit_adjust={model_args.logit_adjust}, mixup={model_args.mixup_minority}, "
+              f"tta={model_args.use_tta}, color_constancy={model_args.color_constancy}")
 
         result = train_single_model(m, model_args, output_dir, hw, train_df, ham_val_df, pad_val_df)
         all_results[m] = result

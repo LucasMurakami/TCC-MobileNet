@@ -6,15 +6,52 @@
       "priority": 1,
       "optional": false,
       "mel_threshold": "youden",
+      "bcc_threshold": "youden",
       "balanced_sampling": true,
-      "logit_adjust": 1.0,
+      "logit_adjust": 0.0,
       "mixup_minority": 0.2,
+      "use_tta": true,
       "models": {
-        "v1": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
-        "v2": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
-        "v3": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
-        "v4": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 4, "seed": 42},
-        "v5": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 4, "seed": 42}
+        "v1": {
+          "epochs": 20,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 4,
+          "seed": 42
+        },
+        "v2": {
+          "epochs": 20,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 4,
+          "seed": 42
+        },
+        "v3": {
+          "epochs": 20,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 4,
+          "seed": 42
+        },
+        "v4": {
+          "epochs": 20,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.00005,
+          "patience": 4,
+          "seed": 42
+        },
+        "v5": {
+          "epochs": 20,
+          "batch_size": 32,
+          "lr_stage1": 0.0005,
+          "lr_stage2": 0.00002,
+          "patience": 4,
+          "seed": 42
+        }
       }
     },
     "medium": {
@@ -23,15 +60,52 @@
       "priority": 2,
       "optional": false,
       "mel_threshold": "youden",
+      "bcc_threshold": "youden",
       "balanced_sampling": true,
-      "logit_adjust": 1.0,
+      "logit_adjust": 0.0,
       "mixup_minority": 0.2,
+      "use_tta": true,
       "models": {
-        "v1": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
-        "v2": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
-        "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
-        "v4": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 5, "seed": 42},
-        "v5": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 5, "seed": 42}
+        "v1": {
+          "epochs": 30,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 5,
+          "seed": 42
+        },
+        "v2": {
+          "epochs": 30,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 5,
+          "seed": 42
+        },
+        "v3": {
+          "epochs": 30,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 5,
+          "seed": 42
+        },
+        "v4": {
+          "epochs": 30,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.00005,
+          "patience": 5,
+          "seed": 42
+        },
+        "v5": {
+          "epochs": 30,
+          "batch_size": 32,
+          "lr_stage1": 0.0005,
+          "lr_stage2": 0.00002,
+          "patience": 5,
+          "seed": 42
+        }
       }
     },
     "low": {
@@ -40,32 +114,52 @@
       "priority": 3,
       "optional": false,
       "mel_threshold": "youden",
+      "bcc_threshold": "youden",
       "balanced_sampling": true,
-      "logit_adjust": 1.0,
+      "logit_adjust": 0.0,
       "mixup_minority": 0.2,
+      "use_tta": true,
       "models": {
-        "v1": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
-        "v2": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
-        "v3": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
-        "v4": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 3, "seed": 42},
-        "v5": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 3, "seed": 42}
-      }
-    },
-    "maximum": {
-      "name": "Maximum (Peak Performance - Optional)",
-      "description": "50 Epochs, Patience 8, deep fine-tuning for SOTA convergence (optional, excluded from default batch runs).",
-      "priority": 4,
-      "optional": true,
-      "mel_threshold": "youden",
-      "balanced_sampling": true,
-      "logit_adjust": 1.0,
-      "mixup_minority": 0.2,
-      "models": {
-        "v1": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
-        "v2": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
-        "v3": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 8, "seed": 42},
-        "v4": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00005, "patience": 8, "seed": 42},
-        "v5": {"epochs": 50, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 8, "seed": 42}
+        "v1": {
+          "epochs": 15,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 3,
+          "seed": 42
+        },
+        "v2": {
+          "epochs": 15,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 3,
+          "seed": 42
+        },
+        "v3": {
+          "epochs": 15,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.0001,
+          "patience": 3,
+          "seed": 42
+        },
+        "v4": {
+          "epochs": 15,
+          "batch_size": 32,
+          "lr_stage1": 0.001,
+          "lr_stage2": 0.00005,
+          "patience": 3,
+          "seed": 42
+        },
+        "v5": {
+          "epochs": 15,
+          "batch_size": 32,
+          "lr_stage1": 0.0005,
+          "lr_stage2": 0.00002,
+          "patience": 3,
+          "seed": 42
+        }
       }
     }
   }

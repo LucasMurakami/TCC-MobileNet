@@ -350,6 +350,19 @@ class PyTorchGradCAM:
 
                         # Bilinear upsample to input resolution
                         cam_up = nn.functional.interpolate(cam, size=(H, W), mode='bilinear', align_corners=False)
+
+                        # High-resolution boundary fusion with Stage 2 (if available)
+                        if self.s2_activations is not None and self.s2_gradients is not None:
+                            s2_acts = self.s2_activations.float()
+                            s2_grads = self.s2_gradients.float()
+                            w_s2 = torch.relu(s2_grads)
+                            cam_s2 = torch.relu((w_s2 * s2_acts).sum(dim=1, keepdim=True))
+                            if cam_s2.max() > eps:
+                                cam_s2_up = nn.functional.interpolate(cam_s2, size=(H, W), mode='bilinear', align_corners=False)
+                                cam_s2_norm = (cam_s2_up - cam_s2_up.min()) / (cam_s2_up.max() - cam_s2_up.min() + eps)
+                                cam_msfa_norm = (cam_up - cam_up.min()) / (cam_up.max() - cam_up.min() + eps)
+                                cam_up = 0.75 * cam_msfa_norm + 0.25 * cam_s2_norm
+
                         heatmap_np = cam_up[0, 0].detach().cpu().numpy()
 
                         if heatmap_np.max() > eps:
@@ -411,6 +424,12 @@ class PyTorchGradCAM:
             except Exception:
                 pass
             self.hook_handle = None
+        if self.s2_hook_handle is not None:
+            try:
+                self.s2_hook_handle.remove()
+            except Exception:
+                pass
+            self.s2_hook_handle = None
 
 
 def overlay_gradcam(original_img: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45, colormap: str = 'jet') -> np.ndarray:
@@ -440,10 +459,15 @@ def generate_gradcam_gallery(
     output_path: Optional[Union[str, Path]] = None,
     model_name: str = "Model",
     device: Optional[torch.device] = None,
+    target_mode: str = "pred",
 ) -> Optional[plt.Figure]:
     """
-    Generates a CNN interpretability Grad-CAM gallery containing at least ONE representative
+    Generates a CNN/ViT interpretability Grad-CAM gallery containing at least ONE representative
     sample for EVERY diagnostic class present in the validation dataset.
+
+    Args:
+        target_mode: 'pred' (attention on predicted class), 'true' (attention on ground truth class),
+                     or 'contrastive' (4 columns: Input | Pred CAM | True Class CAM | Overlay).
     """
     raw_model = model.module if hasattr(model, 'module') else model
     if device is None:
@@ -468,7 +492,11 @@ def generate_gradcam_gallery(
         return None
 
     num_samples = len(samples)
-    fig, axes = plt.subplots(num_samples, 3, figsize=(13, 3.8 * num_samples))
+    is_contrastive = (target_mode == "contrastive")
+    num_cols = 4 if is_contrastive else 3
+    fig_width = 16 if is_contrastive else 13
+
+    fig, axes = plt.subplots(num_samples, num_cols, figsize=(fig_width, 3.8 * num_samples))
     fig.patch.set_facecolor('#fafafa')
 
     if num_samples == 1:
@@ -488,11 +516,17 @@ def generate_gradcam_gallery(
             img_tensor = transform(pil_img).unsqueeze(0).to(device)
 
             true_label_idx = class_names.index(true_class)
-            heatmap, probs = cam_gen(img_tensor, target_class=None)
+
+            # Generate CAM based on target_mode
+            if target_mode == "true":
+                heatmap, probs = cam_gen(img_tensor, target_class=true_label_idx)
+            else:
+                heatmap, probs = cam_gen(img_tensor, target_class=None)
 
             pred_label_idx = int(np.argmax(probs))
             pred_class = class_names[pred_label_idx]
             confidence = float(probs[pred_label_idx])
+            true_conf = float(probs[true_label_idx])
             superimposed = overlay_gradcam(img_np, heatmap, alpha=0.45, colormap='jet')
 
             is_correct = (true_label_idx == pred_label_idx)
@@ -503,18 +537,39 @@ def generate_gradcam_gallery(
             axes[row_idx, 0].set_title(f"Input: {Path(img_path).name}\nTrue Class: {true_class.upper()}", fontsize=10, fontweight='bold')
             axes[row_idx, 0].axis('off')
 
-            # 2. Grad-CAM Activation Heatmap
-            axes[row_idx, 1].imshow(heatmap, cmap='jet')
-            axes[row_idx, 1].set_title("Grad-CAM CNN Attention Heatmap\n(Where the model looks)", fontsize=10, fontweight='bold')
-            axes[row_idx, 1].axis('off')
+            if is_contrastive:
+                # 2. Predicted Class CAM
+                axes[row_idx, 1].imshow(heatmap, cmap='jet')
+                axes[row_idx, 1].set_title(f"Pred CAM: {pred_class.upper()} ({confidence:.1%})\n(Why model chose this)", fontsize=9, fontweight='bold')
+                axes[row_idx, 1].axis('off')
 
-            # 3. Superimposed Overlay
-            axes[row_idx, 2].imshow(superimposed)
-            axes[row_idx, 2].set_title(
-                f"Pred: {pred_class.upper()} ({confidence:.1%})\nResult: {'CORRECT' if is_correct else 'INCORRECT'}",
-                fontsize=10, fontweight='bold', color=status_color
-            )
-            axes[row_idx, 2].axis('off')
+                # 3. Ground Truth / True Class CAM (e.g. MEL or BCC evidence)
+                true_cam, _ = cam_gen(img_tensor, target_class=true_label_idx)
+                axes[row_idx, 2].imshow(true_cam, cmap='jet')
+                axes[row_idx, 2].set_title(f"True CAM: {true_class.upper()} ({true_conf:.1%})\n(Pathology evidence)", fontsize=9, fontweight='bold')
+                axes[row_idx, 2].axis('off')
+
+                # 4. Superimposed Overlay
+                axes[row_idx, 3].imshow(superimposed)
+                axes[row_idx, 3].set_title(
+                    f"Pred: {pred_class.upper()} ({confidence:.1%})\nResult: {'CORRECT' if is_correct else 'INCORRECT'}",
+                    fontsize=10, fontweight='bold', color=status_color
+                )
+                axes[row_idx, 3].axis('off')
+            else:
+                # 2. Activation Heatmap
+                title_cam = f"Grad-CAM Attention Heatmap\n(Target: {true_class.upper()})" if target_mode == "true" else "Grad-CAM CNN Attention Heatmap\n(Where the model looks)"
+                axes[row_idx, 1].imshow(heatmap, cmap='jet')
+                axes[row_idx, 1].set_title(title_cam, fontsize=10, fontweight='bold')
+                axes[row_idx, 1].axis('off')
+
+                # 3. Superimposed Overlay
+                axes[row_idx, 2].imshow(superimposed)
+                axes[row_idx, 2].set_title(
+                    f"Pred: {pred_class.upper()} ({confidence:.1%})\nResult: {'CORRECT' if is_correct else 'INCORRECT'}",
+                    fontsize=10, fontweight='bold', color=status_color
+                )
+                axes[row_idx, 2].axis('off')
 
         except Exception as e:
             print(f"Warning: Could not process Grad-CAM for {img_path}: {e}")

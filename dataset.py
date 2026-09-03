@@ -169,8 +169,8 @@ def load_pad_ufes20_validation(val_root: Path) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def prepare_dataset(cache_root: Path, prepared_dir: Path, test_size: float = 0.2, random_state: int = 42):
-    """Prepare HAM10000 training data and internal validation set."""
+def prepare_dataset(cache_root: Path, prepared_dir: Path, test_size: float = 0.2, random_state: int = 42, oversample: bool = True):
+    """Prepare HAM10000 training data and internal validation set with strict patient/lesion isolation."""
     cache_root = Path(cache_root)
     prepared_dir = Path(prepared_dir)
     raw_dir = cache_root / "ham10000_raw"
@@ -190,6 +190,7 @@ def prepare_dataset(cache_root: Path, prepared_dir: Path, test_size: float = 0.2
         for f in glob.glob(os.path.join(raw_dir, '*', ext)):
             imageid_path_dict[os.path.splitext(os.path.basename(f))[0]] = f
     df['path'] = df['image_id'].map(imageid_path_dict)
+    df = df.dropna(subset=['path', 'dx']).copy().reset_index(drop=True)
 
     # Use pre-split prepared_dir if it has .ready marker
     ready_file = prepared_dir / '.ready'
@@ -206,28 +207,49 @@ def prepare_dataset(cache_root: Path, prepared_dir: Path, test_size: float = 0.2
         train_df, val_df = train_test_split(df_local, test_size=test_size, random_state=random_state, stratify=df_local['dx'])
         return train_df, val_df
 
-    # Split first
-    train_df, val_df = train_test_split(df, test_size=test_size, random_state=random_state, stratify=df['dx'])
+    # Strict Lesion-Level Grouped Stratified Split to eliminate data leakage
+    if 'lesion_id' in df.columns:
+        print("[dataset] Applying strict lesion-grouped stratified splitting on 'lesion_id' (Zero Data Leakage)...")
+        lesion_df = df.groupby('lesion_id')['dx'].first().reset_index()
+        train_lesions, val_lesions = train_test_split(
+            lesion_df['lesion_id'],
+            test_size=test_size,
+            random_state=random_state,
+            stratify=lesion_df['dx']
+        )
+        train_lesion_set = set(train_lesions)
+        val_lesion_set = set(val_lesions)
 
-    # Oversample training
-    print("[dataset] Oversampling training set...")
-    max_size = train_df['dx'].value_counts().max()
-    lst = []
-    for _, group in train_df.groupby('dx'):
-        lst.append(resample(group, replace=True, n_samples=max_size, random_state=random_state))
-    train_df = pd.concat(lst)
+        train_df = df[df['lesion_id'].isin(train_lesion_set)].copy().reset_index(drop=True)
+        val_df = df[df['lesion_id'].isin(val_lesion_set)].copy().reset_index(drop=True)
 
-    print(f"[dataset] Train: {len(train_df)}, Val: {len(val_df)}")
+        leak_check = train_lesion_set.intersection(val_lesion_set)
+        assert len(leak_check) == 0, f"Critical Data Leakage Detected: {len(leak_check)} lesions in both sets!"
+        print(f"[dataset] Zero-Leakage Split verified: {len(train_lesion_set)} train lesions, {len(val_lesion_set)} val lesions. Overlap = 0.")
+    else:
+        print("[dataset] 'lesion_id' column not found; falling back to image-level stratified split.")
+        train_df, val_df = train_test_split(df, test_size=test_size, random_state=random_state, stratify=df['dx'])
+
+    # Optional Static Oversampling
+    if oversample:
+        print("[dataset] Oversampling training set...")
+        max_size = train_df['dx'].value_counts().max()
+        lst = []
+        for _, group in train_df.groupby('dx'):
+            lst.append(resample(group, replace=True, n_samples=max_size, random_state=random_state))
+        train_df = pd.concat(lst).reset_index(drop=True)
+
+    print(f"[dataset] Train samples: {len(train_df)}, Val samples: {len(val_df)}")
     return train_df, val_df
 
 
-def prepare_dataset_with_external_validation(cache_root: Path, prepared_dir: Path, pad_ufes_dir: Path, random_state: int = 42):
+def prepare_dataset_with_external_validation(cache_root: Path, prepared_dir: Path, pad_ufes_dir: Path, random_state: int = 42, oversample: bool = True):
     """Prepare HAM10000 training data and PAD-UFES-20 validation data."""
     cache_root = Path(cache_root)
     prepared_dir = Path(prepared_dir)
     pad_ufes_dir = Path(pad_ufes_dir)
 
-    train_df, _ = prepare_dataset(cache_root, prepared_dir, random_state=random_state)
+    train_df, _ = prepare_dataset(cache_root, prepared_dir, random_state=random_state, oversample=oversample)
     val_dir = ensure_pad_ufes20_download(cache_root) if not pad_ufes_dir.exists() else pad_ufes_dir
     val_df = load_pad_ufes20_validation(val_dir)
     return train_df, val_df

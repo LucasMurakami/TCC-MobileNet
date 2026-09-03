@@ -150,6 +150,27 @@ class SkinDataset(Dataset):
         return img, label
 
 
+class ShadesOfGray(object):
+    """Applies Minkowski p-norm (Shades-of-Gray) color constancy to an image tensor.
+    Standardizes illumination differences between polarized dermoscopy (HAM10000)
+    and ambient/flash clinical smartphone photography (PAD-UFES-20).
+    """
+    def __init__(self, p: float = 6.0, eps: float = 1e-6):
+        self.p = float(p)
+        self.eps = float(eps)
+
+    def __call__(self, img_tensor: torch.Tensor) -> torch.Tensor:
+        if not isinstance(img_tensor, torch.Tensor):
+            return img_tensor
+        img = img_tensor.float().clamp(min=0.0, max=1.0)
+        p_pow = torch.pow(img.clamp(min=self.eps), self.p)
+        ill = torch.pow(torch.mean(p_pow, dim=(1, 2)), 1.0 / self.p)
+        norm_factor = torch.norm(ill, p=2) + self.eps
+        scale = (ill * float(np.sqrt(3.0)) / norm_factor).view(3, 1, 1)
+        normalized = img / (scale + self.eps)
+        return normalized.clamp(0.0, 1.0)
+
+
 class PyTorchFocalLoss(nn.Module):
     def __init__(self, alpha=None, gamma=2.0):
         super().__init__()
@@ -196,6 +217,80 @@ def mixup_data(x, y, alpha=0.2):
     y_a, y_b = y, y[index]
     return mixed_x, y_a, y_b, lam
 
+def _evaluate_binary_triage(probs: np.ndarray, targets: np.ndarray, threshold_spec, default_th: float = 0.15) -> dict:
+    """Computes multi-point operating curves and calibrated sensitivity/specificity
+    for a high-stakes binary triage or cancer screening target.
+    """
+    operating_points = {}
+    total_pos = int(targets.sum())
+    for ref_th in [0.50, 0.30, 0.20, 0.15, 0.10, 0.05, 0.02]:
+        bin_p = (probs >= ref_th).astype(int)
+        tp = int(np.sum((bin_p == 1) & (targets == 1)))
+        fn = int(np.sum((bin_p == 0) & (targets == 1)))
+        fp = int(np.sum((bin_p == 1) & (targets == 0)))
+        tn = int(np.sum((bin_p == 0) & (targets == 0)))
+        sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+        spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+        operating_points[f"tau_{ref_th:.2f}"] = {
+            'threshold': ref_th,
+            'sensitivity': round(sens, 4),
+            'specificity': round(spec, 4),
+            'detected': f"{tp}/{total_pos}"
+        }
+
+    effective_th = default_th
+    if threshold_spec is not None:
+        if isinstance(threshold_spec, str):
+            th_str = threshold_spec.lower().strip()
+            if th_str in ('auto', 'youden'):
+                if len(np.unique(targets)) > 1:
+                    fpr_arr, tpr_arr, th_arr = roc_curve(targets, probs)
+                    j_scores = tpr_arr - fpr_arr
+                    best_j_idx = np.argmax(j_scores)
+                    effective_th = float(th_arr[best_j_idx])
+                    effective_th = max(0.01, min(0.90, effective_th))
+                else:
+                    effective_th = default_th
+            elif th_str in ('sens90', 'sens_90', 'recall90'):
+                if len(np.unique(targets)) > 1:
+                    fpr_arr, tpr_arr, th_arr = roc_curve(targets, probs)
+                    valid_idx = np.where(tpr_arr >= 0.90)[0]
+                    effective_th = float(th_arr[valid_idx[0]]) if len(valid_idx) > 0 else 0.10
+                else:
+                    effective_th = 0.10
+            elif th_str in ('sens95', 'sens_95', 'recall95'):
+                if len(np.unique(targets)) > 1:
+                    fpr_arr, tpr_arr, th_arr = roc_curve(targets, probs)
+                    valid_idx = np.where(tpr_arr >= 0.95)[0]
+                    effective_th = float(th_arr[valid_idx[0]]) if len(valid_idx) > 0 else 0.05
+                else:
+                    effective_th = 0.05
+            else:
+                try:
+                    effective_th = float(threshold_spec)
+                except ValueError:
+                    effective_th = default_th
+        else:
+            effective_th = float(threshold_spec)
+
+    bin_preds = (probs >= effective_th).astype(int)
+    tp = int(np.sum((bin_preds == 1) & (targets == 1)))
+    fn = int(np.sum((bin_preds == 0) & (targets == 1)))
+    fp = int(np.sum((bin_preds == 1) & (targets == 0)))
+    tn = int(np.sum((bin_preds == 0) & (targets == 0)))
+    sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
+    spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
+    f1 = float(2 * tp / (2 * tp + fp + fn)) if (2 * tp + fp + fn) > 0 else 0.0
+
+    return {
+        'threshold': round(effective_th, 4),
+        'sensitivity': round(sens, 4),
+        'specificity': round(spec, 4),
+        'f1': round(f1, 4),
+        'detected': f"{tp}/{total_pos}",
+        'operating_points': operating_points
+    }
+
 
 def evaluate_dataset(
     model,
@@ -205,16 +300,23 @@ def evaluate_dataset(
     has_cuda,
     criterion=None,
     mel_threshold=None,
+    bcc_threshold='youden',
+    malignant_threshold=None,
     logit_adjust=0.0,
-    class_priors=None
+    class_priors=None,
+    use_tta=False
 ):
-    """Runs a complete evaluation pass on a dataset loader with optional Logit Adjustment and Triage Thresholding.
+    """Runs a complete evaluation pass on a dataset loader with optional Logit Adjustment,
+    Triage Thresholding, and Test-Time Augmentation (TTA).
     
     Args:
         criterion: Loss function to use for validation loss computation.
         mel_threshold: Operating sensitivity threshold for melanoma triage.
+        bcc_threshold: Operating sensitivity threshold for Basal Cell Carcinoma triage.
+        malignant_threshold: Operating threshold for 2-tier malignancy screening (MEL + BCC + AKIEC).
         logit_adjust: Strength of post-hoc Bayesian prior correction (0.0 to 1.0).
         class_priors: Training set prior distribution array for Logit Adjustment.
+        use_tta: If True, computes 4-view Test-Time Augmentation (orig, hflip, vflip, rot90).
     """
     model.eval()
     all_preds, all_targets, all_probs = [], [], []
@@ -230,9 +332,21 @@ def evaluate_dataset(
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda else torch.nullcontext():
-                out = model(x)
-                loss = criterion(out, y)
+            if use_tta:
+                x_h = torch.flip(x, dims=[-1])
+                x_v = torch.flip(x, dims=[-2])
+                x_r = torch.rot90(x, 1, [-2, -1])
+                with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda else torch.nullcontext():
+                    out1 = model(x)
+                    out2 = model(x_h)
+                    out3 = model(x_v)
+                    out4 = model(x_r)
+                    out = (out1 + out2 + out3 + out4) / 4.0
+                    loss = criterion(out, y)
+            else:
+                with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda else torch.nullcontext():
+                    out = model(x)
+                    loss = criterion(out, y)
 
             # Apply Post-Hoc Logit Adjustment (Solution B)
             if log_priors is not None:
@@ -254,39 +368,28 @@ def evaluate_dataset(
     all_probs = np.array(all_probs)
     report = classification_report(all_targets, all_preds, labels=range(NUM_CLASSES), target_names=CLASS_NAMES, output_dict=True, zero_division=0)
 
-    # ── AUC-ROC Calculations ──
-    # 1. Binary Melanoma Triage (Melanoma vs Non-Melanoma)
+    # 1. Continuous Melanoma AUC-ROC
     mel_idx = CLASS_NAMES.index('mel')
     binary_mel_targets = (all_targets == mel_idx).astype(int)
     mel_probs = all_probs[:, mel_idx]
-    
-    try:
-        if len(np.unique(binary_mel_targets)) > 1:
-            mel_auc_roc = float(roc_auc_score(binary_mel_targets, mel_probs))
-        else:
-            mel_auc_roc = 0.0
-    except Exception:
+    if len(np.unique(binary_mel_targets)) > 1:
+        mel_auc_roc = float(roc_auc_score(binary_mel_targets, mel_probs))
+    else:
         mel_auc_roc = 0.0
 
-    # 2. Multi-Class One-vs-Rest AUC-ROC
+    # 2. Continuous Basal Cell Carcinoma AUC-ROC & Per-Class AUC
     per_class_auc = {}
     valid_aucs = []
-    present_classes = np.unique(all_targets)
-    for idx, name in enumerate(CLASS_NAMES):
-        if idx in present_classes:
-            bin_y = (all_targets == idx).astype(int)
-            if len(np.unique(bin_y)) > 1:
-                try:
-                    cls_auc = float(roc_auc_score(bin_y, all_probs[:, idx]))
-                    per_class_auc[name] = cls_auc
-                    valid_aucs.append(cls_auc)
-                except Exception:
-                    per_class_auc[name] = 0.0
-            else:
-                per_class_auc[name] = 0.0
+    for cls_name in CLASS_NAMES:
+        c_idx = CLASS_NAMES.index(cls_name)
+        c_bin_targets = (all_targets == c_idx).astype(int)
+        c_probs = all_probs[:, c_idx]
+        if len(np.unique(c_bin_targets)) > 1:
+            score = float(roc_auc_score(c_bin_targets, c_probs))
+            per_class_auc[cls_name] = round(score, 4)
+            valid_aucs.append(score)
         else:
-            per_class_auc[name] = None
-            
+            per_class_auc[cls_name] = 0.0
     macro_auc_roc = float(np.mean(valid_aucs)) if len(valid_aucs) > 0 else 0.0
 
     # 3. Harmonized 5-Class Granular Metrics (Shared between HAM10000 and PAD-UFES-20: mel, bcc, akiec, nv, bkl)
@@ -299,69 +402,20 @@ def evaluate_dataset(
     else:
         harmonized_5class_acc = float(report['accuracy'])
 
-    # 4. ── Melanoma Clinical Triage & Operating Threshold Evaluation ──
-    mel_operating_points = {}
-    total_mel = int(binary_mel_targets.sum())
-    for ref_th in [0.50, 0.30, 0.20, 0.15, 0.10, 0.05, 0.02]:
-        bin_p = (mel_probs >= ref_th).astype(int)
-        tp = int(np.sum((bin_p == 1) & (binary_mel_targets == 1)))
-        fn = int(np.sum((bin_p == 0) & (binary_mel_targets == 1)))
-        fp = int(np.sum((bin_p == 1) & (binary_mel_targets == 0)))
-        tn = int(np.sum((bin_p == 0) & (binary_mel_targets == 0)))
-        sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
-        spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
-        mel_operating_points[f"tau_{ref_th:.2f}"] = {
-            'threshold': ref_th,
-            'sensitivity': round(sens, 4),
-            'specificity': round(spec, 4),
-            'detected': f"{tp}/{total_mel}"
-        }
+    # 4. ── Melanoma Clinical Triage Evaluation ──
+    mel_res = _evaluate_binary_triage(mel_probs, binary_mel_targets, mel_threshold, default_th=0.15)
 
-    # Resolve specific operating threshold
-    effective_threshold = 0.15
-    if mel_threshold is not None:
-        if isinstance(mel_threshold, str):
-            mel_str = mel_threshold.lower().strip()
-            if mel_str in ('auto', 'youden'):
-                if len(np.unique(binary_mel_targets)) > 1:
-                    fpr_arr, tpr_arr, th_arr = roc_curve(binary_mel_targets, mel_probs)
-                    j_scores = tpr_arr - fpr_arr
-                    best_j_idx = np.argmax(j_scores)
-                    effective_threshold = float(th_arr[best_j_idx])
-                    effective_threshold = max(0.01, min(0.90, effective_threshold))
-                else:
-                    effective_threshold = 0.15
-            elif mel_str in ('sens90', 'sens_90', 'recall90'):
-                if len(np.unique(binary_mel_targets)) > 1:
-                    fpr_arr, tpr_arr, th_arr = roc_curve(binary_mel_targets, mel_probs)
-                    valid_idx = np.where(tpr_arr >= 0.90)[0]
-                    effective_threshold = float(th_arr[valid_idx[0]]) if len(valid_idx) > 0 else 0.10
-                else:
-                    effective_threshold = 0.10
-            elif mel_str in ('sens95', 'sens_95', 'recall95'):
-                if len(np.unique(binary_mel_targets)) > 1:
-                    fpr_arr, tpr_arr, th_arr = roc_curve(binary_mel_targets, mel_probs)
-                    valid_idx = np.where(tpr_arr >= 0.95)[0]
-                    effective_threshold = float(th_arr[valid_idx[0]]) if len(valid_idx) > 0 else 0.05
-                else:
-                    effective_threshold = 0.05
-            else:
-                try:
-                    effective_threshold = float(mel_threshold)
-                except ValueError:
-                    effective_threshold = 0.15
-        else:
-            effective_threshold = float(mel_threshold)
+    # 5. ── Basal Cell Carcinoma (BCC) Clinical Triage Evaluation ──
+    bcc_idx = CLASS_NAMES.index('bcc')
+    binary_bcc_targets = (all_targets == bcc_idx).astype(int)
+    bcc_probs = all_probs[:, bcc_idx]
+    bcc_res = _evaluate_binary_triage(bcc_probs, binary_bcc_targets, bcc_threshold, default_th=0.15)
 
-    # Compute metrics at effective threshold
-    bin_preds = (mel_probs >= effective_threshold).astype(int)
-    tp = int(np.sum((bin_preds == 1) & (binary_mel_targets == 1)))
-    fn = int(np.sum((bin_preds == 0) & (binary_mel_targets == 1)))
-    fp = int(np.sum((bin_preds == 1) & (binary_mel_targets == 0)))
-    tn = int(np.sum((bin_preds == 0) & (binary_mel_targets == 0)))
-    triage_sens = float(tp / (tp + fn)) if (tp + fn) > 0 else 0.0
-    triage_spec = float(tn / (tn + fp)) if (tn + fp) > 0 else 0.0
-    triage_f1 = float(2 * tp / (2 * tp + fp + fn)) if (2 * tp + fp + fn) > 0 else 0.0
+    # 6. ── Joint Malignancy Screening Evaluation (MEL + BCC + AKIEC) ──
+    mal_indices = [CLASS_NAMES.index(c) for c in ['mel', 'bcc', 'akiec']]
+    binary_mal_targets = np.isin(all_targets, mal_indices).astype(int)
+    mal_probs = np.clip(all_probs[:, mal_indices].sum(axis=1), 0.0, 1.0)
+    mal_res = _evaluate_binary_triage(mal_probs, binary_mal_targets, malignant_threshold, default_th=0.25)
     
     return {
         'loss': v_loss / max(v_tot, 1),
@@ -375,12 +429,31 @@ def evaluate_dataset(
         'macro_auc_roc': macro_auc_roc,
         'per_class_auc': per_class_auc,
         'harmonized_5class_acc': harmonized_5class_acc,
-        'mel_triage_recall': triage_sens,
-        'mel_triage_spec': triage_spec,
-        'mel_triage_f1': triage_f1,
-        'mel_triage_threshold': round(effective_threshold, 4),
-        'mel_triage_detected': f"{tp}/{total_mel}",
-        'mel_operating_points': mel_operating_points,
+
+        # Melanoma Triage Metrics
+        'mel_triage_recall': mel_res['sensitivity'],
+        'mel_triage_spec': mel_res['specificity'],
+        'mel_triage_f1': mel_res['f1'],
+        'mel_triage_threshold': mel_res['threshold'],
+        'mel_triage_detected': mel_res['detected'],
+        'mel_operating_points': mel_res['operating_points'],
+
+        # Basal Cell Carcinoma Triage Metrics
+        'bcc_triage_recall': bcc_res['sensitivity'],
+        'bcc_triage_spec': bcc_res['specificity'],
+        'bcc_triage_f1': bcc_res['f1'],
+        'bcc_triage_threshold': bcc_res['threshold'],
+        'bcc_triage_detected': bcc_res['detected'],
+        'bcc_operating_points': bcc_res['operating_points'],
+
+        # Joint Malignancy Screening Metrics (MEL + BCC + AKIEC)
+        'malignant_triage_recall': mal_res['sensitivity'],
+        'malignant_triage_spec': mal_res['specificity'],
+        'malignant_triage_f1': mal_res['f1'],
+        'malignant_triage_threshold': mal_res['threshold'],
+        'malignant_triage_detected': mal_res['detected'],
+        'malignant_operating_points': mal_res['operating_points'],
+
         'all_preds': all_preds,
         'all_targets': all_targets,
         'all_probs': all_probs,
@@ -432,20 +505,38 @@ def train_single_model(
         model = nn.DataParallel(model)
     model = model.to(device)
 
-    train_transform = transforms.Compose([
+    use_color_constancy = getattr(args, 'color_constancy', False)
+    use_tta = getattr(args, 'use_tta', False)
+
+    train_tf_list = [
         transforms.Resize((img_size, img_size)),
         transforms.RandomHorizontalFlip(),
         transforms.RandomVerticalFlip(),
         transforms.RandomRotation(30),
-        transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.15),
+        transforms.RandomAffine(degrees=0, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
+        transforms.RandomAdjustSharpness(sharpness_factor=1.5, p=0.3),
+        transforms.RandomAutocontrast(p=0.3),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
-    val_transform = transforms.Compose([
+    ]
+    val_tf_list = [
         transforms.Resize((img_size, img_size)),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    ]
+
+    if use_color_constancy:
+        train_tf_list.append(ShadesOfGray(p=6.0))
+        val_tf_list.append(ShadesOfGray(p=6.0))
+        print("  🌈 Illumination Constancy: ENABLED (Shades-of-Gray Minkowski p=6.0)")
+
+    train_tf_list.append(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+    val_tf_list.append(transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]))
+
+    train_transform = transforms.Compose(train_tf_list)
+    val_transform = transforms.Compose(val_tf_list)
+
+    if use_tta:
+        print("  🔄 Test-Time Augmentation (TTA): ENABLED (4-view multi-angle inference)")
 
     balanced_sampling = getattr(args, 'balanced_sampling', False)
     logit_adjust = float(getattr(args, 'logit_adjust', 0.0) or 0.0)
@@ -461,12 +552,15 @@ def train_single_model(
 
     if balanced_sampling:
         class_counts = train_df['dx'].value_counts().to_dict()
-        sample_weights = [1.0 / max(class_counts.get(dx, 1), 1) for dx in train_df['dx']]
-        sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
-        train_loader = DataLoader(train_ds, batch_size=micro_batch, sampler=sampler, num_workers=num_workers, pin_memory=use_pin)
-        print("  ⚖️  Balanced Batch Sampling: ENABLED (WeightedRandomSampler)")
+        # Smoothed inverse weighting for balanced representation
+        sample_weights = [1.0 / (max(class_counts.get(dx, 1), 1) ** 0.5) for dx in train_df['dx']]
+        # Dynamic augmented oversampling: sample enough to expose model to rich variations of all classes
+        total_samples = max(class_counts.values()) * NUM_CLASSES
+        sampler = WeightedRandomSampler(weights=sample_weights, num_samples=total_samples, replacement=True)
+        train_loader = DataLoader(train_ds, batch_size=micro_batch, sampler=sampler, num_workers=num_workers, pin_memory=use_pin, drop_last=True)
+        print(f"  ⚖️  Dynamic Augmented Oversampling: ENABLED ({total_samples} samples/epoch, drop_last=True)")
     else:
-        train_loader = DataLoader(train_ds, batch_size=micro_batch, shuffle=True, num_workers=num_workers, pin_memory=use_pin)
+        train_loader = DataLoader(train_ds, batch_size=micro_batch, shuffle=True, num_workers=num_workers, pin_memory=use_pin, drop_last=True)
 
     if logit_adjust > 0.0:
         print(f"  🎯 Logit Prior Adjustment: ENABLED (tau={logit_adjust:.2f})")
@@ -476,8 +570,12 @@ def train_single_model(
     ham_val_loader = DataLoader(ham_val_ds, batch_size=micro_batch * 2, shuffle=False, num_workers=num_workers, pin_memory=use_pin)
     pad_val_loader = DataLoader(pad_val_ds, batch_size=micro_batch * 2, shuffle=False, num_workers=num_workers, pin_memory=use_pin)
 
-    weights_dict = compute_class_weights(train_df['dx'])
-    weight_tensor = torch.tensor([weights_dict[i] for i in range(NUM_CLASSES)], dtype=torch.float32).to(device)
+    if balanced_sampling:
+        # Batches are already dynamically balanced; use neutral alpha to avoid compounding penalties
+        weight_tensor = torch.ones(NUM_CLASSES, dtype=torch.float32).to(device)
+    else:
+        weights_dict = compute_class_weights(train_df['dx'])
+        weight_tensor = torch.tensor([weights_dict[i] for i in range(NUM_CLASSES)], dtype=torch.float32).to(device)
     criterion = PyTorchFocalLoss(alpha=weight_tensor, gamma=2.0)
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -701,11 +799,15 @@ def train_single_model(
     print(f"{'='*80}\n")
 
     mel_th = getattr(args, 'mel_threshold', None)
+    bcc_th = getattr(args, 'bcc_threshold', 'youden')
+    mal_th = getattr(args, 'malignant_threshold', None)
 
     # 1. In-Domain Evaluation (HAM10000)
     ham_results = evaluate_dataset(
         model, ham_val_loader, device, precision_dtype, has_cuda,
-        mel_threshold=mel_th, logit_adjust=logit_adjust, class_priors=train_class_priors
+        mel_threshold=mel_th, bcc_threshold=bcc_th, malignant_threshold=mal_th,
+        logit_adjust=logit_adjust, class_priors=train_class_priors,
+        use_tta=use_tta
     )
     ham_dir = model_dir / 'ham10000'
     ham_dir.mkdir(parents=True, exist_ok=True)
@@ -718,9 +820,13 @@ def train_single_model(
 
     # 2. Out-of-Domain Evaluation (PAD-UFES-20)
     calibrated_th = ham_results['mel_triage_threshold']
+    calibrated_bcc_th = ham_results['bcc_triage_threshold']
+    calibrated_mal_th = ham_results['malignant_triage_threshold']
     pad_results = evaluate_dataset(
         model, pad_val_loader, device, precision_dtype, has_cuda,
-        mel_threshold=calibrated_th, logit_adjust=logit_adjust, class_priors=train_class_priors
+        mel_threshold=calibrated_th, bcc_threshold=calibrated_bcc_th, malignant_threshold=calibrated_mal_th,
+        logit_adjust=logit_adjust, class_priors=train_class_priors,
+        use_tta=use_tta
     )
     pad_dir = model_dir / 'pad_ufes_20'
     pad_dir.mkdir(parents=True, exist_ok=True)
@@ -751,9 +857,13 @@ def train_single_model(
         'batch_size': args.batch_size,
         'params': sum(p.numel() for p in model.parameters()),
         'mel_triage_threshold': calibrated_th,
+        'bcc_triage_threshold': calibrated_bcc_th,
+        'malignant_triage_threshold': calibrated_mal_th,
         'balanced_sampling': balanced_sampling,
         'logit_adjust': logit_adjust,
         'mixup_minority': mixup_minority,
+        'color_constancy': use_color_constancy,
+        'use_tta': use_tta,
 
         # Stage 1 Benchmarks
         'stage1_ham_accuracy': s1_ham_eval['accuracy'],
@@ -772,6 +882,11 @@ def train_single_model(
         'ham_mel_triage_recall': ham_results['mel_triage_recall'],
         'ham_mel_triage_spec': ham_results['mel_triage_spec'],
         'ham_mel_operating_points': ham_results['mel_operating_points'],
+        'ham_bcc_triage_recall': ham_results['bcc_triage_recall'],
+        'ham_bcc_triage_spec': ham_results['bcc_triage_spec'],
+        'ham_bcc_operating_points': ham_results['bcc_operating_points'],
+        'ham_malignant_triage_recall': ham_results['malignant_triage_recall'],
+        'ham_malignant_triage_spec': ham_results['malignant_triage_spec'],
 
         # Stage 2 Out-of-Domain PAD-UFES-20 Metrics
         'pad_accuracy': pad_results['accuracy'],
@@ -787,6 +902,14 @@ def train_single_model(
         'pad_mel_triage_spec': pad_results['mel_triage_spec'],
         'pad_mel_triage_detected': pad_results['mel_triage_detected'],
         'pad_mel_operating_points': pad_results['mel_operating_points'],
+        'pad_bcc_triage_recall': pad_results['bcc_triage_recall'],
+        'pad_bcc_triage_spec': pad_results['bcc_triage_spec'],
+        'pad_bcc_triage_detected': pad_results['bcc_triage_detected'],
+        'pad_bcc_operating_points': pad_results['bcc_operating_points'],
+        'pad_malignant_triage_recall': pad_results['malignant_triage_recall'],
+        'pad_malignant_triage_spec': pad_results['malignant_triage_spec'],
+        'pad_malignant_triage_detected': pad_results['malignant_triage_detected'],
+        'pad_malignant_operating_points': pad_results['malignant_operating_points'],
 
         # Clinical Domain Shift Drop (In-Domain - Out-of-Domain)
         'domain_gap': float(domain_gap),
@@ -799,11 +922,15 @@ def train_single_model(
     print(f"\n===========================================================================")
     print(f" 📊 Final Results Summary for {model_name.upper()}:")
     print(f"   In-Domain (HAM10000):     Acc={ham_results['accuracy']:.2%} | Macro AUC={ham_results['macro_auc_roc']:.4f} | Mel AUC={ham_results['mel_auc_roc']:.4f}")
-    print(f"     ↳ Argmax Mel Recall:    {ham_results['mel_recall']:.2%}")
-    print(f"     ↳ Triage (tau={calibrated_th:.2f}):    Mel Recall={ham_results['mel_triage_recall']:.2%} | Spec={ham_results['mel_triage_spec']:.2%}")
+    print(f"     ↳ Argmax:               Mel Recall={ham_results['mel_recall']:.2%} | BCC Recall={ham_results['bcc_recall']:.2%}")
+    print(f"     ↳ MEL Triage (tau={calibrated_th:.2f}): Mel Recall={ham_results['mel_triage_recall']:.2%} | Spec={ham_results['mel_triage_spec']:.2%}")
+    print(f"     ↳ BCC Triage (tau={calibrated_bcc_th:.2f}): BCC Recall={ham_results['bcc_triage_recall']:.2%} | Spec={ham_results['bcc_triage_spec']:.2%}")
+    print(f"     ↳ Malignancy Screen:    Recall={ham_results['malignant_triage_recall']:.2%} | Spec={ham_results['malignant_triage_spec']:.2%}")
     print(f"   Out-of-Domain (PAD-UFES): Acc={pad_results['accuracy']:.2%} | Macro AUC={pad_results['macro_auc_roc']:.4f} | Mel AUC={pad_results['mel_auc_roc']:.4f}")
-    print(f"     ↳ Argmax Mel Recall:    {pad_results['mel_recall']:.2%}")
-    print(f"     ↳ Triage (tau={calibrated_th:.2f}):    Mel Recall={pad_results['mel_triage_recall']:.2%} | Spec={pad_results['mel_triage_spec']:.2%} | Detected={pad_results['mel_triage_detected']}")
+    print(f"     ↳ Argmax:               Mel Recall={pad_results['mel_recall']:.2%} | BCC Recall={pad_results['bcc_recall']:.2%}")
+    print(f"     ↳ MEL Triage (tau={calibrated_th:.2f}): Mel Recall={pad_results['mel_triage_recall']:.2%} | Spec={pad_results['mel_triage_spec']:.2%} | Detected={pad_results['mel_triage_detected']}")
+    print(f"     ↳ BCC Triage (tau={calibrated_bcc_th:.2f}): BCC Recall={pad_results['bcc_triage_recall']:.2%} | Spec={pad_results['bcc_triage_spec']:.2%} | Detected={pad_results['bcc_triage_detected']}")
+    print(f"     ↳ Malignancy Screen:    Recall={pad_results['malignant_triage_recall']:.2%} | Spec={pad_results['malignant_triage_spec']:.2%} | Detected={pad_results['malignant_triage_detected']}")
     print(f"   Clinical Domain Gap (Δ Acc Drop): -{domain_gap*100:.2f}%")
     print(f"   Results saved to: {model_dir / 'results.json'}")
     print(f"   Domain Comparison Chart: {model_dir / 'domain_comparison.png'}")
