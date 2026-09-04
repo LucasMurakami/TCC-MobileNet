@@ -37,18 +37,16 @@ def parse_args():
     parser.add_argument('--resume', action='store_true', default=False,
                         help="Resume existing session instead of creating an incremented run folder (e.g. 18_08_2026_run2)")
     parser.add_argument('--scenario', type=str, default='all',
-                        choices=['all', 'standard', 'medium', 'low', 'maximum'],
-                        help="Scenario to run (default: all active scenarios: Standard -> Medium -> Low)")
+                        help="Scenario from benchmark_scenarios.json, or all active scenarios")
     parser.add_argument('--models', nargs='+', default=None,
                         help="Subset of models to run (e.g. --models v1 v4conv v5). Default: all models in scenario.")
-    parser.add_argument('--val-dataset', type=str, default='both',
-                        choices=['ham10000', 'pad-ufes-20', 'both'], help="Validation dataset source")
     parser.add_argument('--scenarios-file', type=str, default='benchmark_scenarios.json',
                         help="Path to scenarios JSON config")
     parser.add_argument('--experiments-root', type=str, default='./experiments',
                         help="Root experiments directory")
     parser.add_argument('--python-bin', type=str, default=sys.executable,
                         help="Path to Python virtualenv binary")
+    parser.add_argument('--no-cudnn', action='store_true', default=False, help="Disable cuDNN compatibility path")
     return parser.parse_args()
 
 
@@ -78,7 +76,7 @@ def resolve_session_directory(root_dir: Path, session_id: str = None, resume: bo
         return base_date, base_dir
 
 
-from main import update_session_leaderboard, update_global_archive_index
+from main import resolve_run_config, update_session_leaderboard, update_global_archive_index
 
 
 def is_experiment_completed(exp_dir: Path) -> bool:
@@ -93,7 +91,7 @@ def update_master_leaderboard(session_dir: Path, new_entry: dict = None):
     return update_session_leaderboard(session_dir)
 
 
-def update_global_archive_index(root_dir: Path):
+def update_global_archive_index_legacy(root_dir: Path):
     """Generates a global master catalog of all dated experiment sessions."""
     archive_file = root_dir / 'GLOBAL_ARCHIVE_INDEX.md'
     session_dirs = [d for d in root_dir.iterdir() if d.is_dir() and d.name != 'scenarios']
@@ -171,6 +169,8 @@ def main():
     if args.scenario == 'all':
         scenario_keys = [k for k, v in sorted(scenarios_data.items(), key=lambda x: x[1].get('priority', 99)) if not v.get('optional', False)]
     else:
+        if args.scenario not in scenarios_data:
+            raise SystemExit(f"Unknown scenario '{args.scenario}'. Available: {', '.join(scenarios_data)}")
         scenario_keys = [args.scenario]
 
     # Global cached datasets
@@ -178,28 +178,33 @@ def main():
     prepared_dir = Path('./dataset_treino')
     train_csv = root_dir / 'train_df.csv'
     ham_val_csv = root_dir / 'ham_val_df.csv'
+    ham_test_csv = root_dir / 'ham_test_df.csv'
     pad_val_csv = root_dir / 'pad_val_df.csv'
 
     # Session-isolated zero-leakage datasets
-    from dataset import prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
+    from dataset import build_split_manifest, prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation, save_split_manifest
     pad_dir = ensure_pad_ufes20_download(data_cache)
 
-    if not (session_dir / 'train_df.csv').exists() or not (session_dir / 'ham_val_df.csv').exists():
-        print("\n  [Setup] Initializing zero-leakage lesion-grouped training & validation splits...")
-        t_df, h_df = prepare_dataset(cache_root=data_cache, prepared_dir=prepared_dir, random_state=42, oversample=False)
+    split_paths = [session_dir / name for name in ('train_df.csv', 'ham_val_df.csv', 'ham_test_df.csv')]
+    if not all(path.exists() for path in split_paths):
+        print("\n  [Setup] Initializing zero-leakage 70/10/20 lesion-grouped splits...")
+        t_df, h_df, ht_df = prepare_dataset(cache_root=data_cache, prepared_dir=prepared_dir, random_state=42, oversample=False)
         t_df.to_csv(session_dir / 'train_df.csv', index=False)
         h_df.to_csv(session_dir / 'ham_val_df.csv', index=False)
-        # Also refresh root cache
+        ht_df.to_csv(session_dir / 'ham_test_df.csv', index=False)
+        save_split_manifest(build_split_manifest(t_df, h_df, ht_df, random_state=42), session_dir / 'split_manifest.json')
         t_df.to_csv(train_csv, index=False)
         h_df.to_csv(ham_val_csv, index=False)
+        ht_df.to_csv(ham_test_csv, index=False)
 
     if not (session_dir / 'pad_val_df.csv').exists():
-        p_df = load_pad_ufes20_validation(pad_dir)
+        p_df = load_pad_ufes20_validation(pad_dir, session_dir / 'pad_label_mapping.json')
         p_df.to_csv(session_dir / 'pad_val_df.csv', index=False)
         p_df.to_csv(pad_val_csv, index=False)
 
     train_csv = session_dir / 'train_df.csv'
     ham_val_csv = session_dir / 'ham_val_df.csv'
+    ham_test_csv = session_dir / 'ham_test_df.csv'
     pad_val_csv = session_dir / 'pad_val_df.csv'
 
     print(f"\n{'='*85}")
@@ -224,20 +229,19 @@ def main():
                 continue
 
             cfg = models_dict[model_name]
-            epochs = cfg['epochs']
-            bs = cfg['batch_size']
-            lr1 = cfg['lr_stage1']
-            lr2 = cfg['lr_stage2']
-            pat = cfg['patience']
-            seed = cfg['seed']
-
-            mel_threshold = cfg.get('mel_threshold', s_info.get('mel_threshold', 'youden'))
-            bcc_threshold = cfg.get('bcc_threshold', s_info.get('bcc_threshold', 'youden'))
-            balanced_sampling = cfg.get('balanced_sampling', s_info.get('balanced_sampling', True))
-            logit_adjust = float(cfg.get('logit_adjust', s_info.get('logit_adjust', 0.0)) or 0.0)
-            mixup_minority = float(cfg.get('mixup_minority', s_info.get('mixup_minority', 0.2)) or 0.0)
-            use_tta = cfg.get('use_tta', s_info.get('use_tta', True))
-            color_constancy = cfg.get('color_constancy', s_info.get('color_constancy', False))
+            cli_defaults = argparse.Namespace(
+                epochs=None, patience=None, batch_size=None, lr_stage1=None, lr_stage2=None, seed=None,
+                img_size=None, mel_threshold=None, bcc_threshold=None, malignant_threshold=None,
+                balanced_sampling=False, logit_adjust=None, mixup_alpha=None, use_tta=False,
+                color_constancy=False, stage1_epochs=None, no_cudnn=args.no_cudnn
+            )
+            resolved = resolve_run_config(cli_defaults, s_info, cfg)
+            epochs, bs = resolved.epochs, resolved.batch_size
+            lr1, lr2, pat, seed = resolved.lr_stage1, resolved.lr_stage2, resolved.patience, resolved.seed
+            mel_threshold, bcc_threshold = resolved.mel_threshold, resolved.bcc_threshold
+            balanced_sampling, logit_adjust = resolved.balanced_sampling, resolved.logit_adjust
+            mixup_alpha, use_tta = resolved.mixup_alpha, resolved.use_tta
+            color_constancy = resolved.color_constancy
 
             exp_id = f"{s_key}_{model_name}_ep{epochs}_bs{bs}_lr2_{lr2}_pat{pat}_seed{seed}"
             exp_dir = session_dir / 'scenarios' / s_key / model_name
@@ -263,9 +267,12 @@ def main():
                 'patience': pat,
                 'seed': seed,
                 'mel_threshold': mel_threshold,
+                'bcc_threshold': bcc_threshold,
                 'balanced_sampling': balanced_sampling,
                 'logit_adjust': logit_adjust,
-                'mixup_minority': mixup_minority,
+                'mixup_alpha': mixup_alpha,
+                'use_tta': use_tta,
+                'color_constancy': color_constancy,
                 'val_dataset': 'dual (HAM10000 + PAD-UFES-20)',
                 'timestamp_start': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 'python_version': sys.version.split()[0],
@@ -275,11 +282,13 @@ def main():
                 json.dump(config_data, f, indent=2)
 
             print(f"  ▶️ [TRAINING] Epochs={epochs}, LR2={lr2}, BatchSize={bs}, Patience={pat}, "
-                  f"BalancedSampling={balanced_sampling}, LogitAdjust={logit_adjust}, Mixup={mixup_minority}, Threshold={mel_threshold}")
+                  f"BalancedSampling={balanced_sampling}, LogitAdjust={logit_adjust}, Mixup={mixup_alpha}, Threshold={mel_threshold}")
 
             cmd = [
                 args.python_bin, 'train_timm_models.py',
                 '--model', model_name,
+                '--scenario', s_key,
+                '--scenarios-file', args.scenarios_file,
                 '--epochs', str(epochs),
                 '--batch-size', str(bs),
                 '--lr-stage1', str(lr1),
@@ -287,18 +296,25 @@ def main():
                 '--patience', str(pat),
                 '--train-csv', str(train_csv),
                 '--val-csv', str(ham_val_csv),
+                '--test-csv', str(ham_test_csv),
                 '--external-val-csv', str(pad_val_csv),
-                '--val-dataset', 'both',
                 '--output-dir', str(exp_dir),
                 '--seed', str(seed),
             ]
 
+            cmd.extend(['--stage1-epochs', str(resolved.stage1_epochs)])
+            if resolved.img_size is not None:
+                cmd.extend(['--img-size', str(resolved.img_size)])
+            if resolved.malignant_threshold is not None:
+                cmd.extend(['--malignant-threshold', str(resolved.malignant_threshold)])
+            if resolved.no_cudnn:
+                cmd.append('--no-cudnn')
             if balanced_sampling:
                 cmd.append('--balanced-sampling')
             if logit_adjust > 0.0:
                 cmd.extend(['--logit-adjust', str(logit_adjust)])
-            if mixup_minority > 0.0:
-                cmd.extend(['--mixup-minority', str(mixup_minority)])
+            if mixup_alpha > 0.0:
+                cmd.extend(['--mixup-alpha', str(mixup_alpha)])
             if mel_threshold is not None:
                 cmd.extend(['--mel-threshold', str(mel_threshold)])
             if bcc_threshold is not None:
@@ -312,7 +328,6 @@ def main():
             try:
                 env = os.environ.copy()
                 env['PYTHONUNBUFFERED'] = '1'
-                env['HF_HUB_OFFLINE'] = '1'
                 process = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,

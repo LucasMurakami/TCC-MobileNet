@@ -460,6 +460,7 @@ def generate_gradcam_gallery(
     model_name: str = "Model",
     device: Optional[torch.device] = None,
     target_mode: str = "pred",
+    transform=None,
 ) -> Optional[plt.Figure]:
     """
     Generates a CNN/ViT interpretability Grad-CAM gallery containing at least ONE representative
@@ -485,7 +486,7 @@ def generate_gradcam_gallery(
     for cls in class_names:
         matching = val_df[val_df['dx'] == cls]
         if len(matching) > 0:
-            samples.append((cls, matching.iloc[0]['path']))
+            samples.append((cls, matching.sample(1, random_state=42).iloc[0]['path']))
 
     if not samples:
         cam_gen.remove_hooks()
@@ -502,11 +503,12 @@ def generate_gradcam_gallery(
     if num_samples == 1:
         axes = np.expand_dims(axes, 0)
 
-    transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    if transform is None:
+        transform = transforms.Compose([
+            transforms.Resize((img_size, img_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
 
     for row_idx, (true_class, img_path) in enumerate(samples):
         try:
@@ -593,9 +595,9 @@ def plot_benchmark_summary(
 ) -> plt.Figure:
     """Generate a multi-model comparative bar chart across all evaluated architectures."""
     model_names = list(results.keys())
-    accuracies = [results[m].get('accuracy', 0.0) for m in model_names]
-    f1_scores = [results[m].get('weighted_avg_f1', 0.0) for m in model_names]
-    macro_f1s = [results[m].get('macro_avg_f1', 0.0) for m in model_names]
+    accuracies = [results[m].get('pad_accuracy', results[m].get('accuracy', 0.0)) for m in model_names]
+    f1_scores = [results[m].get('pad_mel_auc_roc', results[m].get('mel_auc_roc', 0.0)) for m in model_names]
+    macro_f1s = [results[m].get('pad_macro_auc_roc', results[m].get('macro_auc_roc', 0.0)) for m in model_names]
 
     x = np.arange(len(model_names))
     width = 0.26
@@ -604,9 +606,9 @@ def plot_benchmark_summary(
     fig.patch.set_facecolor('#fafafa')
     ax.set_facecolor('#ffffff')
 
-    rects1 = ax.bar(x - width, accuracies, width, label='Accuracy', color='#1f77b4', edgecolor='white')
-    rects2 = ax.bar(x, f1_scores, width, label='Weighted F1', color='#ff7f0e', edgecolor='white')
-    rects3 = ax.bar(x + width, macro_f1s, width, label='Macro F1', color='#2ca02c', edgecolor='white')
+    rects1 = ax.bar(x - width, accuracies, width, label='PAD Accuracy', color='#1f77b4', edgecolor='white')
+    rects2 = ax.bar(x, f1_scores, width, label='PAD Melanoma AUC', color='#ff7f0e', edgecolor='white')
+    rects3 = ax.bar(x + width, macro_f1s, width, label='PAD Macro AUC', color='#2ca02c', edgecolor='white')
 
     ax.set_title("MobileNet V1–V5 Architecture Comparison", fontsize=14, fontweight='bold', pad=12)
     ax.set_xlabel('Model Architecture', fontsize=11, labelpad=8)

@@ -11,13 +11,10 @@ import pandas as pd
 import torch
 import timm
 
-if torch.cuda.is_available():
-    torch.backends.cudnn.enabled = False
-
 # Setup path to import workspace modules
 sys.path.append(str(Path(__file__).parent))
 from dataset import CLASS_NAMES, NUM_CLASSES, prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
-from train_timm_models import MODEL_CONFIGS
+from train_timm_models import MODEL_CONFIGS, build_transforms
 from visualize import generate_gradcam_gallery
 
 
@@ -48,7 +45,7 @@ def load_validation_dataframes(target_dir: Path):
             break
     if ham_val_df is None:
         print("  [dataset] Preparing HAM10000 validation split...")
-        _, ham_val_df = prepare_dataset(Path('./data_cache'), Path('./dataset_treino'))
+        _, _, ham_val_df = prepare_dataset(Path('./data_cache'), Path('./dataset_treino'), oversample=False)
 
     # 2. PAD-UFES-20 out-of-domain validation set
     pad_candidates = [
@@ -138,6 +135,7 @@ def main():
             model.load_state_dict(state_dict)
             model = model.to(device)
             model.eval()
+            val_transform, _ = build_transforms(model, img_size, train=False)
 
             # Output directories
             model_dir = cp_path.parent
@@ -155,7 +153,8 @@ def main():
                 img_size=img_size,
                 output_path=ham_dir / 'gradcam_heatmaps.png',
                 model_name=f"{model_name}_HAM",
-                device=device
+                device=device,
+                transform=val_transform
             )
 
             # 2. Out-of-domain PAD-UFES-20 Grad-CAM
@@ -167,7 +166,8 @@ def main():
                 img_size=img_size,
                 output_path=pad_dir / 'gradcam_heatmaps.png',
                 model_name=f"{model_name}_PAD",
-                device=device
+                device=device,
+                transform=val_transform
             )
 
             # 3. Top-level backward-compatible gallery
@@ -178,7 +178,8 @@ def main():
                 img_size=img_size,
                 output_path=model_dir / 'gradcam_heatmaps.png',
                 model_name=model_name,
-                device=device
+                device=device,
+                transform=val_transform
             )
 
             # Free GPU memory

@@ -66,6 +66,8 @@ To reconcile 7-class deep representation learning with clinical screening and tr
      $$\hat{P}(\text{Melanoma}) = p_{\text{mel}}, \quad \hat{P}(\text{Non-Melanoma}) = 1 - p_{\text{mel}}$$
    - Computes **Binary Melanoma AUC-ROC (`mel_auc_roc`)**, **Melanoma Sensitivity (Recall)**, and **Specificity** on both dermoscopy and clinical smartphone photos.
 
+Per-model learning rates are fixed in `benchmark_scenarios.json` before the final benchmark and are not selected from PAD-UFES-20. HAM10000 is divided by `lesion_id` into 70% training, 10% tuning validation, and 20% held-out test partitions. The tuning partition controls checkpoint selection and operating thresholds. Final HAM and PAD-UFES-20 metrics are evaluated in FP32. PAD thresholds are transferred from HAM validation without PAD fitting; PAD-calibrated thresholds are stored only as explicitly labelled oracle diagnostics. Confidence intervals use lesion-cluster bootstrap resampling.
+
 ---
 
 ## 🏗️ Repository Architecture
@@ -115,8 +117,8 @@ python main.py --scenario standard --model all
 # Train only MobileNet V5 with Balanced Batch Sampling and Youden Threshold Calibration
 python main.py --scenario standard --model v5 --balanced-sampling --mel-threshold youden
 
-# Train MobileNet V4 with Logit Adjustment and Minority Mixup
-python main.py --scenario medium --model v4 --logit-adjust 1.0 --mixup-minority 0.2
+# Train MobileNet V4 with Logit Adjustment and Mixup
+python main.py --scenario medium --model v4 --logit-adjust 1.0 --mixup-alpha 0.2
 
 # Custom Fast Exploration Run
 python main.py --scenario low --model v3 --epochs 15 --batch-size 32 --mel-threshold 0.15
@@ -140,8 +142,8 @@ python main.py --scenario low --model v3 --epochs 15 --batch-size 32 --mel-thres
 | `--mel-threshold` | `float, auto, youden, sens90, sens95` | `0.15` | Operating threshold for Melanoma clinical triage. CLI always overrides JSON. |
 | `--balanced-sampling`| *flag* | `False` | Enables `WeightedRandomSampler` to eliminate 67% Nevus mini-batch dominance. |
 | `--logit-adjust` | `float` | `0.0` | Post-hoc Bayesian logit adjustment strength $\tau$ (*ICLR 2021*) to strip prior bias. |
-| `--mixup-minority` | `float` | `0.0` | Beta-distribution $\alpha$ parameter for synthetic minority class Mixup. |
-| `--val-dataset` | `ham10000, pad-ufes-20, both` | `both` | Target validation evaluation scope. |
+| `--mixup-alpha` | `float` | `0.0` | Beta-distribution $\alpha$ parameter for standard batch Mixup. |
+| `--stage1-epochs` | `int` | `3` | Classifier-head warmup epochs. |
 | `--seed` | `int` | `42` | Global random seed for PyTorch, NumPy, and CUDA. |
 
 ---
@@ -152,11 +154,11 @@ To combat the severe 67% Nevus dominance in HAM10000 and the 37% BCC / 2.3% Mela
 
 ```text
 ┌───────────────────────────────────────┬───────────────────────────────────────┬───────────────────────────────────────┐
-│ 1. Balanced Batch Sampling (Sol. A)   │ 2. Post-Hoc Logit Adjustment (Sol. B) │ 3. Minority Mixup Augmentation (Sol. C)│
+│ 1. Balanced Batch Sampling (Sol. A)   │ 2. Post-Hoc Logit Adjustment (Sol. B) │ 3. Standard Mixup Augmentation (Sol. C)│
 ├───────────────────────────────────────┼───────────────────────────────────────┼───────────────────────────────────────┤
-│ Flag: --balanced-sampling             │ Flag: --logit-adjust 1.0              │ Flag: --mixup-minority 0.2            │
-│ Samples each class with equal ~14.3%  │ Strips dataset prior penalty:         │ Interpolates rare malignant lesions   │
-│ probability per mini-batch.           │ z_adj = z - tau * log(pi)             │ with diverse skin contexts.           │
+│ Flag: --balanced-sampling             │ Flag: --logit-adjust 1.0              │ Flag: --mixup-alpha 0.2               │
+│ Samples minority classes more often.  │ Strips dataset prior penalty:         │ Interpolates examples and labels      │
+│ Uses one balancing strategy only.     │ z_adj = z - tau * log(pi)             │ across each training mini-batch.      │
 └───────────────────────────────────────┴───────────────────────────────────────┴───────────────────────────────────────┘
 ```
 
@@ -174,5 +176,5 @@ Each benchmark execution automatically compiles comprehensive clinical evaluatio
 - **`gradcam_heatmaps.png`**: Multi-column attention gallery (Grad-CAM for V1–V4, Jacob Gil MSFA LayerCAM for V5).
 - **`training_curves.png`**: Multi-stage loss and accuracy trajectory over training epochs.
 - **`results.json` & `classification_report.json`**: Exact numerical scores including `mel_auc_roc`, `macro_auc_roc`, `mel_triage_recall`, `pad_mel_triage_detected`, and per-class metrics.
-- **`master_leaderboard.csv` & `SUMMARY.md`**: Automatically maintained leaderboard ranking all models by OOD accuracy and calibrated triage sensitivity.
+- **`master_leaderboard.csv` & `SUMMARY.md`**: Automatically maintained leaderboard ranked by PAD Melanoma AUC-ROC, then held-out HAM Melanoma AUC-ROC, including cluster-bootstrap confidence intervals and the 0.85 target flags.
 

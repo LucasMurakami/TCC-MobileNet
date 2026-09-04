@@ -9,7 +9,7 @@
       "bcc_threshold": "youden",
       "balanced_sampling": true,
       "logit_adjust": 0.0,
-      "mixup_minority": 0.2,
+      "mixup_alpha": 0.2,
       "use_tta": true,
       "models": {
         "v1": {
@@ -63,7 +63,7 @@
       "bcc_threshold": "youden",
       "balanced_sampling": true,
       "logit_adjust": 0.0,
-      "mixup_minority": 0.2,
+      "mixup_alpha": 0.2,
       "use_tta": true,
       "models": {
         "v1": {
@@ -117,7 +117,7 @@
       "bcc_threshold": "youden",
       "balanced_sampling": true,
       "logit_adjust": 0.0,
-      "mixup_minority": 0.2,
+      "mixup_alpha": 0.2,
       "use_tta": true,
       "models": {
         "v1": {

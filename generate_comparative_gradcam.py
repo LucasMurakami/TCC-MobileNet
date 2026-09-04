@@ -9,9 +9,7 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision import transforms
 
-if torch.cuda.is_available():
-    torch.backends.cudnn.enabled = False
-
+from train_timm_models import build_transforms
 from visualize import PyTorchGradCAM, overlay_gradcam, generate_gradcam_gallery
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -80,11 +78,7 @@ for m_name in models:
 
     cam_engine = PyTorchGradCAM(m)
     img_size = cfg['input_size']
-    transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ])
+    transform, _ = build_transforms(m, img_size, train=False)
 
     for s_list in [ham_samples, pad_samples]:
         for s in s_list:
@@ -120,7 +114,8 @@ for m_name in models:
             output_path=v5_dir / 'ham10000' / 'gradcam_heatmaps.png',
             model_name='v5',
             device=device,
-            target_mode=gallery_mode
+            target_mode=gallery_mode,
+            transform=transform
         )
         generate_gradcam_gallery(
             model=m,
@@ -130,7 +125,8 @@ for m_name in models:
             output_path=v5_dir / 'pad_ufes_20' / 'gradcam_heatmaps.png',
             model_name='v5',
             device=device,
-            target_mode=gallery_mode
+            target_mode=gallery_mode,
+            transform=transform
         )
         generate_gradcam_gallery(
             model=m,
@@ -140,7 +136,8 @@ for m_name in models:
             output_path=v5_dir / 'gradcam_heatmaps.png',
             model_name='v5',
             device=device,
-            target_mode=gallery_mode
+            target_mode=gallery_mode,
+            transform=transform
         )
 
     cam_engine.remove_hooks()

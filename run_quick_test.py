@@ -4,6 +4,7 @@ Quick 5-Epoch Pipeline Verification Runner for MobileNet V3, V4, and V5.
 Session ID: 19_08_2025_test_run_check_pipelines
 """
 
+import argparse
 import os
 import sys
 import json
@@ -12,11 +13,6 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
-
-import torch
-torch.backends.cudnn.enabled = False
-torch.backends.cudnn.benchmark = False
-torch.backends.cudnn.deterministic = True
 
 # Session Configuration
 SESSION_NAME = "19_08_2025_test_run_check_pipelines"
@@ -41,16 +37,26 @@ class TeeLogger:
         self.terminal.flush()
         self.log_file.flush()
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Quick pipeline verification')
+    parser.add_argument('--model', choices=['v1', 'v2', 'v3', 'v4', 'v5', 'all'], default='v1')
+    parser.add_argument('--epochs', type=int, default=1)
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
+    models = MODELS if args.model == 'all' else [args.model]
+    epochs = args.epochs
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     log_path = SESSION_DIR / "execution.log"
     sys.stdout = TeeLogger(log_path)
     sys.stderr = sys.stdout
 
     print(f"\n{'='*85}")
-    print(f" 🚀 Starting Pipeline Test Run Check (5 Epochs)")
+    print(f" 🚀 Starting Pipeline Test Run Check ({epochs} Epochs)")
     print(f" Session ID: {SESSION_NAME}")
-    print(f" Target Models: {', '.join(MODELS)}")
+    print(f" Target Models: {', '.join(models)}")
     print(f" Output Directory: {SESSION_DIR.resolve()}")
     print(f" Log File: {log_path.resolve()}")
     print(f"{'='*85}\n")
@@ -58,51 +64,44 @@ def main():
     # 1. Dataset verification & copying
     train_csv = SESSION_DIR / "train_df.csv"
     ham_val_csv = SESSION_DIR / "ham_val_df.csv"
+    ham_test_csv = SESSION_DIR / "ham_test_df.csv"
     pad_val_csv = SESSION_DIR / "pad_val_df.csv"
 
     data_cache = Path("./data_cache")
     prepared_dir = Path("./dataset_treino")
 
-    if not (train_csv.exists() and ham_val_csv.exists() and pad_val_csv.exists()):
-        # Check parent experiments or mobilenet_outputs first
-        cached_train = Path("experiments/18_08_2026_run2/train_df.csv")
-        cached_ham = Path("experiments/18_08_2026_run2/ham_val_df.csv")
-        cached_pad = Path("experiments/18_08_2026_run2/pad_val_df.csv")
+    if not all(path.exists() for path in (train_csv, ham_val_csv, ham_test_csv, pad_val_csv)):
+        print("  [Setup] Generating dataset splits from scratch...")
+        from dataset import prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
+        t_df, h_df, ht_df = prepare_dataset(
+            cache_root=data_cache, prepared_dir=prepared_dir, random_state=42, oversample=False
+        )
+        pad_dir = ensure_pad_ufes20_download(data_cache)
+        p_df = load_pad_ufes20_validation(pad_dir)
+        t_df.to_csv(train_csv, index=False)
+        h_df.to_csv(ham_val_csv, index=False)
+        ht_df.to_csv(ham_test_csv, index=False)
+        p_df.to_csv(pad_val_csv, index=False)
 
-        if cached_train.exists() and cached_ham.exists() and cached_pad.exists():
-            print("  [Setup] Copying cached dataset splits...")
-            pd.read_csv(cached_train).to_csv(train_csv, index=False)
-            pd.read_csv(cached_ham).to_csv(ham_val_csv, index=False)
-            pd.read_csv(cached_pad).to_csv(pad_val_csv, index=False)
-        else:
-            print("  [Setup] Generating dataset splits from scratch...")
-            from dataset import prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
-            t_df, h_df = prepare_dataset(cache_root=data_cache, prepared_dir=prepared_dir, random_state=42)
-            pad_dir = ensure_pad_ufes20_download(data_cache)
-            p_df = load_pad_ufes20_validation(pad_dir)
-            t_df.to_csv(train_csv, index=False)
-            h_df.to_csv(ham_val_csv, index=False)
-            p_df.to_csv(pad_val_csv, index=False)
-
-    print(f"  ✓ Datasets Ready: Train={len(pd.read_csv(train_csv))}, HAM_Val={len(pd.read_csv(ham_val_csv))}, PAD_Val={len(pd.read_csv(pad_val_csv))}\n")
+    print(f"  ✓ Datasets Ready: Train={len(pd.read_csv(train_csv))}, HAM_Val={len(pd.read_csv(ham_val_csv))}, HAM_Test={len(pd.read_csv(ham_test_csv))}, PAD_Val={len(pd.read_csv(pad_val_csv))}\n")
 
     # 2. Execute models sequentially
     results_list = []
-    for idx, model in enumerate(MODELS, start=1):
+    for idx, model in enumerate(models, start=1):
         print(f"\n{'#'*85}")
-        print(f" ⚙️ [{idx}/{len(MODELS)}] Running 5-Epoch Verification: {model.upper()}")
+        print(f" ⚙️ [{idx}/{len(models)}] Running {epochs}-Epoch Verification: {model.upper()}")
         print(f"{'#'*85}\n")
 
         cmd = [
             PYTHON_BIN, "-u", "train_timm_models.py",
             "--model", model,
-            "--epochs", str(EPOCHS),
+            "--epochs", str(epochs),
             "--batch-size", str(BATCH_SIZE),
             "--patience", str(PATIENCE),
             "--train-csv", str(train_csv),
             "--val-csv", str(ham_val_csv),
+            "--test-csv", str(ham_test_csv),
             "--external-val-csv", str(pad_val_csv),
-            "--val-dataset", "both",
             "--output-dir", str(SESSION_DIR),
             "--seed", "42"
         ]
@@ -131,7 +130,7 @@ def main():
                 
                 entry = {
                     "model": model.upper(),
-                    "epochs": EPOCHS,
+                    "epochs": epochs,
                     "ham_accuracy": r_data.get("ham_accuracy", 0.0),
                     "pad_accuracy": r_data.get("pad_accuracy", r_data.get("accuracy", 0.0)),
                     "domain_gap": r_data.get("domain_gap", r_data.get("domain_gap_drop", 0.0)),
@@ -158,7 +157,7 @@ def main():
             f.write(df_results.to_markdown(index=False))
             f.write("\n\n---\n")
             f.write("### 🖼️ Generated Visualizations per Model:\n\n")
-            for m in MODELS:
+            for m in models:
                 f.write(f"- **{m.upper()}**:\n")
                 f.write(f"  - In-Domain Heatmaps: `experiments/{SESSION_NAME}/{m}/ham10000/gradcam_heatmaps.png`\n")
                 f.write(f"  - Out-of-Domain Heatmaps: `experiments/{SESSION_NAME}/{m}/pad_ufes_20/gradcam_heatmaps.png`\n")

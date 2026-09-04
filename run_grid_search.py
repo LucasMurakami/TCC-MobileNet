@@ -30,6 +30,8 @@ import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Structured Experiment Orchestrator & Tracker")
+    parser.add_argument('--allow-grid-search', action='store_true', default=False,
+                        help="Explicitly enable extra hyperparameter runs outside the final thesis protocol")
     parser.add_argument('--models', nargs='+', default=['v1', 'v2', 'v3large', 'v4conv', 'v5'],
                         help="Models to benchmark (e.g. v1 v2 v3large v4conv v5)")
     parser.add_argument('--epochs-list', nargs='+', type=int, default=[15, 30],
@@ -44,8 +46,10 @@ def parse_args():
                         help="List of EarlyStopping patience values")
     parser.add_argument('--seeds', nargs='+', type=int, default=[42],
                         help="List of random seeds (e.g. 42 123)")
-    parser.add_argument('--val-dataset', type=str, default='pad-ufes-20',
-                        choices=['ham10000', 'pad-ufes-20'], help="Validation dataset source")
+    parser.add_argument('--val-dataset', type=str, default='ham10000',
+                        choices=['ham10000', 'pad-ufes-20'], help="Hyperparameter selection dataset")
+    parser.add_argument('--allow-pad-selection', action='store_true', default=False,
+                        help="Explicitly permit methodologically invalid PAD-based selection")
     parser.add_argument('--experiments-root', type=str, default='./experiments',
                         help="Root directory where all organized data will be saved")
     parser.add_argument('--python-bin', type=str, default=sys.executable,
@@ -75,7 +79,7 @@ def update_model_tracker(model_dir: Path, new_entry: dict):
     else:
         df = pd.DataFrame([new_entry])
 
-    df.sort_values(by='accuracy', ascending=False, inplace=True)
+    df.sort_values(by='selection_mel_auc_roc', ascending=False, inplace=True)
     df.to_csv(history_csv, index=False)
 
     # Save best configuration for this model
@@ -95,7 +99,7 @@ def update_master_leaderboard(root_dir: Path, new_entry: dict = None):
         else:
             df = pd.DataFrame([new_entry])
 
-        df.sort_values(by=['accuracy', 'weighted_avg_f1'], ascending=[False, False], inplace=True)
+        df.sort_values(by=['selection_mel_auc_roc', 'pad_mel_auc_roc'], ascending=[False, False], inplace=True)
         df.to_csv(leaderboard_csv, index=False)
     elif leaderboard_csv.exists():
         df = pd.read_csv(leaderboard_csv)
@@ -118,6 +122,12 @@ def update_master_leaderboard(root_dir: Path, new_entry: dict = None):
 
 def main():
     args = parse_args()
+    if not args.allow_grid_search:
+        raise SystemExit("Grid search is disabled for the fixed-budget thesis protocol; pass --allow-grid-search explicitly")
+    if args.val_dataset == 'pad-ufes-20' and not args.allow_pad_selection:
+        raise SystemExit("PAD-UFES-20 cannot be used for hyperparameter selection without --allow-pad-selection")
+    if args.seeds != [42]:
+        raise SystemExit("This thesis pipeline uses the single fixed seed 42")
     root_dir = Path(args.experiments_root)
     root_dir.mkdir(parents=True, exist_ok=True)
 
@@ -143,27 +153,22 @@ def main():
     data_cache = Path('./data_cache')
     prepared_dir = Path('./dataset_treino')
     train_csv = root_dir / 'train_df.csv'
-    val_csv = root_dir / 'val_df.csv'
+    val_csv = root_dir / 'ham_val_df.csv'
+    test_csv = root_dir / 'ham_test_df.csv'
+    pad_csv = root_dir / 'pad_val_df.csv'
 
-    if not (train_csv.exists() and val_csv.exists()):
-        print("  [Setup] Initializing stratified training & validation datasets...")
-        from dataset import prepare_dataset_with_external_validation, prepare_dataset
-        if args.val_dataset == 'pad-ufes-20':
-            t_df, v_df = prepare_dataset_with_external_validation(
-                cache_root=data_cache,
-                prepared_dir=prepared_dir,
-                pad_ufes_dir=data_cache / 'pad_ufes_20_raw',
-                random_state=42
-            )
-        else:
-            t_df, v_df = prepare_dataset(
-                cache_root=data_cache,
-                prepared_dir=prepared_dir,
-                random_state=42
-            )
+    if not all(path.exists() for path in (train_csv, val_csv, test_csv, pad_csv)):
+        print("  [Setup] Initializing train, HAM validation/test, and PAD evaluation datasets...")
+        from dataset import ensure_pad_ufes20_download, load_pad_ufes20_validation, prepare_dataset
+        t_df, v_df, test_df = prepare_dataset(
+            cache_root=data_cache, prepared_dir=prepared_dir, random_state=42, oversample=False
+        )
+        pad_df = load_pad_ufes20_validation(ensure_pad_ufes20_download(data_cache))
         t_df.to_csv(train_csv, index=False)
         v_df.to_csv(val_csv, index=False)
-        print(f"  [Setup] Datasets cached at: {train_csv} and {val_csv}\n")
+        test_df.to_csv(test_csv, index=False)
+        pad_df.to_csv(pad_csv, index=False)
+        print(f"  [Setup] Datasets cached under {root_dir}\n")
 
     for run_idx, (model, epochs, bs, lr1, lr2, pat, seed) in enumerate(combinations, start=1):
         model_dir = root_dir / model
@@ -212,7 +217,8 @@ def main():
             '--patience', str(pat),
             '--train-csv', str(train_csv),
             '--val-csv', str(val_csv),
-            '--val-dataset', args.val_dataset,
+            '--test-csv', str(test_csv),
+            '--external-val-csv', str(pad_csv),
             '--output-dir', str(exp_dir),
             '--seed', str(seed),
         ]
@@ -224,13 +230,10 @@ def main():
 
             # Parse results from model subfolder
             results_path = exp_dir / model / 'results.json'
-            report_path = exp_dir / model / 'classification_report.json'
 
-            if results_path.exists() and report_path.exists():
+            if results_path.exists():
                 with open(results_path) as f:
                     res_data = json.load(f)
-                with open(report_path) as f:
-                    rep_data = json.load(f)
 
                 # Move files directly to exp_dir for clean access
                 for p in (exp_dir / model).glob('*'):
@@ -240,12 +243,14 @@ def main():
                 except Exception:
                     pass
 
-                acc = res_data.get('accuracy', 0.0)
-                w_f1 = res_data.get('weighted_avg_f1', 0.0)
-                m_f1 = res_data.get('macro_avg_f1', 0.0)
-                mel_rec = rep_data.get('mel', {}).get('recall', 0.0)
-                bcc_rec = rep_data.get('bcc', {}).get('recall', 0.0)
-                akiec_rec = rep_data.get('akiec', {}).get('recall', 0.0)
+                acc = res_data.get('pad_accuracy', 0.0)
+                w_f1 = res_data.get('pad_weighted_f1', 0.0)
+                m_f1 = res_data.get('pad_macro_f1', 0.0)
+                mel_rec = res_data.get('pad_mel_recall', 0.0)
+                bcc_rec = res_data.get('pad_bcc_recall', 0.0)
+                akiec_rec = res_data.get('pad_akiec_recall', 0.0)
+                selection_auc = res_data.get('ham_val_mel_auc_roc', 0.0)
+                pad_auc = res_data.get('pad_mel_auc_roc', 0.0)
 
                 print(f"  ✅ [COMPLETED in {duration/60:.1f} min] Acc: {acc:.2%}, Weighted F1: {w_f1:.4f}, Mel Recall: {mel_rec:.2%}")
 
@@ -260,6 +265,8 @@ def main():
                     'patience': pat,
                     'seed': seed,
                     'val_dataset': args.val_dataset,
+                    'selection_mel_auc_roc': round(selection_auc, 4),
+                    'pad_mel_auc_roc': round(pad_auc, 4),
                     'accuracy': round(acc, 4),
                     'weighted_avg_f1': round(w_f1, 4),
                     'macro_avg_f1': round(m_f1, 4),

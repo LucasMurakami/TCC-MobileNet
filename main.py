@@ -7,10 +7,13 @@ Delegates core training and modeling routines to the timm backbone engine (train
 """
 
 import argparse
+from dataclasses import asdict, dataclass
 from datetime import datetime
 import json
 import os
+import platform
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Union
@@ -20,12 +23,96 @@ import pandas as pd
 import torch
 
 from dataset import (
-    prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
+    build_split_manifest, ensure_pad_ufes20_download, load_pad_ufes20_validation,
+    prepare_dataset, save_split_manifest, validate_image_paths
 )
 from train_timm_models import (
     MODEL_CONFIGS, configure_hardware_environment, train_single_model
 )
 from visualize import plot_benchmark_summary
+
+
+@dataclass
+class RunConfig:
+    epochs: int
+    patience: int
+    batch_size: int
+    lr_stage1: Optional[float]
+    lr_stage2: Optional[float]
+    seed: int
+    img_size: Optional[int]
+    mel_threshold: object
+    bcc_threshold: object
+    malignant_threshold: object
+    balanced_sampling: bool
+    logit_adjust: float
+    mixup_alpha: float
+    use_tta: bool
+    color_constancy: bool
+    stage1_epochs: int
+    eval_precision: str
+    no_cudnn: bool
+
+
+def resolve_run_config(args, scenario_cfg: dict, model_cfg: dict) -> RunConfig:
+    def value(name, default=None):
+        cli_value = getattr(args, name, None)
+        if cli_value is not None:
+            return cli_value
+        if name in model_cfg:
+            return model_cfg[name]
+        return scenario_cfg.get(name, default)
+
+    return RunConfig(
+        epochs=max(1, int(value('epochs', 20))),
+        patience=max(1, int(value('patience', 4))),
+        batch_size=int(value('batch_size', 32)),
+        lr_stage1=value('lr_stage1'),
+        lr_stage2=value('lr_stage2'),
+        seed=int(value('seed', 42)),
+        img_size=value('img_size'),
+        mel_threshold=value('mel_threshold', 0.15),
+        bcc_threshold=value('bcc_threshold', 'youden'),
+        malignant_threshold=value('malignant_threshold'),
+        balanced_sampling=bool(getattr(args, 'balanced_sampling', False) or model_cfg.get('balanced_sampling', scenario_cfg.get('balanced_sampling', False))),
+        logit_adjust=float(value('logit_adjust', 0.0) or 0.0),
+        mixup_alpha=float(value('mixup_alpha', value('mixup_minority', 0.0)) or 0.0),
+        use_tta=bool(getattr(args, 'use_tta', False) or model_cfg.get('use_tta', scenario_cfg.get('use_tta', False))),
+        color_constancy=bool(getattr(args, 'color_constancy', False) or model_cfg.get('color_constancy', scenario_cfg.get('color_constancy', False))),
+        stage1_epochs=int(value('stage1_epochs', 3)),
+        eval_precision=str(value('eval_precision', 'fp32')),
+        no_cudnn=bool(getattr(args, 'no_cudnn', False)),
+    )
+
+
+def write_provenance(output_path: Path, config: RunConfig, hw: dict, split_manifest: dict):
+    from importlib.metadata import PackageNotFoundError, version
+
+    packages = {}
+    for package in ('torch', 'torchvision', 'timm', 'numpy', 'pandas', 'scikit-learn'):
+        try:
+            packages[package] = version(package)
+        except PackageNotFoundError:
+            packages[package] = None
+    try:
+        git_sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+        git_dirty = bool(subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip())
+    except (OSError, subprocess.CalledProcessError):
+        git_sha, git_dirty = None, None
+    serializable_hw = {key: str(value) if key in ('device', 'precision_dtype') else value for key, value in hw.items()}
+    payload = {
+        'config': asdict(config),
+        'hardware': serializable_hw,
+        'split_manifest_sha256': split_manifest['image_ids_sha256']['all'],
+        'packages': packages,
+        'python': sys.version,
+        'platform': platform.platform(),
+        'git_sha': git_sha,
+        'git_dirty': git_dirty,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w') as f:
+        json.dump(payload, f, indent=2)
 
 
 def load_benchmark_scenarios(scenarios_file: Union[str, Path] = "benchmark_scenarios.json") -> dict:
@@ -34,10 +121,6 @@ def load_benchmark_scenarios(scenarios_file: Union[str, Path] = "benchmark_scena
     Supports both 'benchmark_scenarios.json' and 'benchmark_scenarions.json'.
     """
     target_path = Path(scenarios_file)
-    if not target_path.exists():
-        alt_path = Path("benchmark_scenarions.json") if target_path.name == "benchmark_scenarios.json" else Path("benchmark_scenarios.json")
-        if alt_path.exists():
-            target_path = alt_path
 
     if target_path.exists():
         try:
@@ -115,8 +198,8 @@ def print_leaderboard(all_results: dict):
         mel_auc = all_results[m].get('pad_mel_auc_roc', 0.0)
         print(f"  {m:<10} {ham_acc:<15.2%} {pad_acc:<15.2%} {mel_rec:<18.2%} {mel_auc:<15.4f}")
     print("=" * 85)
-    best_m = max(all_results, key=lambda k: all_results[k].get('pad_accuracy', 0.0))
-    print(f"🏆 Best Overall Out-of-Domain Model: {best_m.upper()} (PAD-UFES-20 Acc: {all_results[best_m]['pad_accuracy']:.2%})\n")
+    best_m = max(all_results, key=lambda k: all_results[k].get('pad_mel_auc_roc', 0.0))
+    print(f"🏆 Best Out-of-Domain Melanoma Model: {best_m.upper()} (PAD AUC: {all_results[best_m]['pad_mel_auc_roc']:.4f})\n")
 
 
 def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
@@ -159,8 +242,15 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
                 'ham_accuracy': round(ham_acc, 4),
                 'accuracy': round(pad_acc, 4),
                 'domain_gap': round(gap, 4),
-                'ham_mel_auc_roc': round(float(data.get('ham_mel_auc_roc', 0.0)), 4),
+                'ham_mel_auc_roc': round(float(data.get('ham_test_mel_auc_roc', data.get('ham_mel_auc_roc', 0.0))), 4),
+                'ham_mel_auc_ci_low': round(float(data.get('ham_test_mel_auc_ci_low', 0.0)), 4),
+                'ham_mel_auc_ci_high': round(float(data.get('ham_test_mel_auc_ci_high', 0.0)), 4),
                 'mel_auc_roc': round(float(data.get('pad_mel_auc_roc', 0.0)), 4),
+                'pad_mel_auc_ci_low': round(float(data.get('pad_mel_auc_ci_low', 0.0)), 4),
+                'pad_mel_auc_ci_high': round(float(data.get('pad_mel_auc_ci_high', 0.0)), 4),
+                'mel_auc_gap': round(float(data.get('mel_auc_gap', 0.0)), 4),
+                'meets_auc_target_ham': bool(data.get('meets_auc_target_ham', False)),
+                'meets_auc_target_pad': bool(data.get('meets_auc_target_pad', False)),
                 'triage_th': round(float(data.get('mel_triage_threshold', 0.15)), 2) if data.get('mel_triage_threshold') is not None else 0.15,
                 'ham_triage_sens': round(float(data.get('ham_mel_triage_recall', data.get('ham_mel_recall', 0.0))), 4),
                 'pad_triage_sens': round(float(data.get('pad_mel_triage_recall', data.get('pad_mel_recall', 0.0))), 4),
@@ -181,7 +271,7 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
 
     df = pd.DataFrame(records)
     if not df.empty:
-        df = df.sort_values(by='accuracy', ascending=False)
+        df = df.sort_values(by=['mel_auc_roc', 'ham_mel_auc_roc'], ascending=[False, False])
         df.to_csv(session_dir / 'master_leaderboard.csv', index=False)
 
         # Markdown Leaderboard Table
@@ -235,17 +325,17 @@ def update_global_archive_index(experiments_dir: Path = Path('experiments')):
                 try:
                     with open(rf, 'r') as f:
                         d = json.load(f)
-                    h_acc = float(d.get('ham_accuracy', 0.0))
-                    p_acc = float(d.get('pad_accuracy', 0.0))
-                    if h_acc > top_ham:
-                        top_ham = h_acc
-                    if p_acc > top_pad:
-                        top_pad = p_acc
+                    h_auc = float(d.get('ham_test_mel_auc_roc', d.get('ham_mel_auc_roc', 0.0)))
+                    p_auc = float(d.get('pad_mel_auc_roc', 0.0))
+                    if h_auc > top_ham:
+                        top_ham = h_auc
+                    if p_auc > top_pad:
+                        top_pad = p_auc
                 except Exception:
                     pass
 
-            ham_str = f"{top_ham:.2%}" if top_ham > 0 else "N/A"
-            pad_str = f"{top_pad:.2%}" if top_pad > 0 else "N/A"
+            ham_str = f"{top_ham:.4f}" if top_ham > 0 else "N/A"
+            pad_str = f"{top_pad:.4f}" if top_pad > 0 else "N/A"
             sessions.append({
                 'name': p.name,
                 'runs': run_count,
@@ -262,7 +352,7 @@ def update_global_archive_index(experiments_dir: Path = Path('experiments')):
         "",
         f"*Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
         "",
-        "| Session Date / Folder | Runs Completed | Top In-Domain Acc (HAM) | Top Out-of-Domain Acc (PAD) | Link |",
+        "| Session Date / Folder | Runs Completed | Top HAM Test Mel AUC | Top PAD Mel AUC | Link |",
         "|:---|:---:|:---:|:---:|:---|"
     ]
     for s in sessions:
@@ -293,12 +383,12 @@ def parse_args():
     parser.add_argument('--lr-stage2', type=float, default=None, help='Learning rate for Stage 2 (Fine-tuning)')
     parser.add_argument('--img-size', type=int, default=None, help='Input image resolution')
     parser.add_argument('--train-csv', type=str, default=None, help='Training set CSV (HAM10000 80 percent)')
-    parser.add_argument('--val-csv', type=str, default=None, help='In-domain validation set CSV (HAM10000 20 percent)')
+    parser.add_argument('--val-csv', type=str, default=None, help='In-domain tuning validation CSV (HAM10000)')
+    parser.add_argument('--test-csv', type=str, default=None, help='Held-out in-domain test CSV (HAM10000)')
     parser.add_argument('--external-val-csv', type=str, default=None, help='Out-of-domain validation set CSV (PAD-UFES-20)')
     parser.add_argument('--cache-dir', type=str, default='./data_cache', help='Dataset cache directory')
     parser.add_argument('--prepared-dir', type=str, default='./dataset_treino', help='Prepared dataset directory')
     parser.add_argument('--pad-ufes-dir', type=str, default='./data_cache/pad_ufes_20_raw', help='PAD-UFES-20 dataset directory')
-    parser.add_argument('--val-dataset', type=str, default='both', choices=['ham10000', 'pad-ufes-20', 'both'])
     parser.add_argument('--mel-threshold', type=str, default=None,
                         help="Operating sensitivity threshold for melanoma triage (e.g. 0.15, 'auto', 'youden', 'sens90', 'sens95'). CLI always overrides benchmark_scenarios.json.")
     parser.add_argument('--bcc-threshold', type=str, default=None,
@@ -309,8 +399,10 @@ def parse_args():
                         help="Enable class-balanced mini-batch sampling via WeightedRandomSampler (eliminates 67%% Nevus gradient dominance).")
     parser.add_argument('--logit-adjust', type=float, default=None,
                         help="Post-hoc Bayesian logit adjustment strength tau (e.g. 1.0) to cancel training prior penalty on minority classes.")
-    parser.add_argument('--mixup-minority', type=float, default=None,
-                        help="Beta-distribution alpha parameter (e.g. 0.2) for minority class Mixup data augmentation.")
+    parser.add_argument('--mixup-alpha', '--mixup-minority', dest='mixup_alpha', type=float, default=None,
+                        help="Beta-distribution alpha parameter for Mixup data augmentation.")
+    parser.add_argument('--stage1-epochs', type=int, default=None, help='Classifier-head warmup epochs')
+    parser.add_argument('--no-cudnn', action='store_true', default=False, help='Disable cuDNN compatibility path')
     parser.add_argument('--use-tta', action='store_true', default=False,
                         help="Enable 4-view Test-Time Augmentation (orig, hflip, vflip, rot90) during evaluation.")
     parser.add_argument('--color-constancy', action='store_true', default=False,
@@ -343,13 +435,15 @@ def main():
 
     # Global Random Seed
     base_seed = args.seed if args.seed is not None else 42
+    if base_seed != 42:
+        raise SystemExit("This thesis pipeline uses the single fixed seed 42")
     np.random.seed(base_seed)
     torch.manual_seed(base_seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(base_seed)
 
     # Hardware Detection
-    hw = configure_hardware_environment()
+    hw = configure_hardware_environment(disable_cudnn=args.no_cudnn)
     print_banner(hw, session_dir, args.scenario)
 
     # Load / Prepare Datasets
@@ -357,18 +451,53 @@ def main():
     prepared_dir = Path(args.prepared_dir)
     pad_ufes_dir = Path(args.pad_ufes_dir)
 
-    # 1. Training & In-Domain Validation (HAM10000)
-    if args.train_csv and Path(args.train_csv).exists() and args.val_csv and Path(args.val_csv).exists():
+    # 1. Training, tuning validation, and held-out test (HAM10000)
+    supplied_csvs = args.train_csv and args.val_csv and args.test_csv
+    cached_manifest = None
+    cached_csvs = all((session_dir / name).exists() for name in ('train_df.csv', 'ham_val_df.csv', 'ham_test_df.csv'))
+    if supplied_csvs and all(Path(path).exists() for path in (args.train_csv, args.val_csv, args.test_csv)):
         train_df = pd.read_csv(args.train_csv)
         ham_val_df = pd.read_csv(args.val_csv)
-    elif (session_dir / 'train_df.csv').exists() and (session_dir / 'ham_val_df.csv').exists():
+        ham_test_df = pd.read_csv(args.test_csv)
+    elif cached_csvs:
+        manifest_path = session_dir / 'split_manifest.json'
+        if not manifest_path.exists():
+            raise RuntimeError(f"Cached splits require {manifest_path}")
+        with open(manifest_path, 'r') as f:
+            cached_manifest = json.load(f)
+        if int(cached_manifest['random_state']) != base_seed:
+            raise RuntimeError(f"Cached split seed {cached_manifest['random_state']} does not match requested seed {base_seed}")
         train_df = pd.read_csv(session_dir / 'train_df.csv')
         ham_val_df = pd.read_csv(session_dir / 'ham_val_df.csv')
+        ham_test_df = pd.read_csv(session_dir / 'ham_test_df.csv')
     else:
-        print("[dataset] Preparing HAM10000 dataset (zero-leakage patient-grouped split)...")
-        train_df, ham_val_df = prepare_dataset(data_cache, prepared_dir, random_state=base_seed, oversample=not args.balanced_sampling)
-        train_df.to_csv(session_dir / 'train_df.csv', index=False)
-        ham_val_df.to_csv(session_dir / 'ham_val_df.csv', index=False)
+        print("[dataset] Preparing HAM10000 dataset (70/10/20 lesion-grouped split)...")
+        train_df, ham_val_df, ham_test_df = prepare_dataset(
+            data_cache, prepared_dir, random_state=base_seed, oversample=False
+        )
+    invalid_images = {}
+    cleaned_splits = []
+    for split_name, frame in (('train', train_df), ('val', ham_val_df), ('test', ham_test_df)):
+        clean_frame, bad_paths = validate_image_paths(frame)
+        invalid_images[split_name] = bad_paths
+        cleaned_splits.append(clean_frame)
+    train_df, ham_val_df, ham_test_df = cleaned_splits
+    with open(session_dir / 'invalid_images.json', 'w') as f:
+        json.dump(invalid_images, f, indent=2)
+    train_df.to_csv(session_dir / 'train_df.csv', index=False)
+    ham_val_df.to_csv(session_dir / 'ham_val_df.csv', index=False)
+    ham_test_df.to_csv(session_dir / 'ham_test_df.csv', index=False)
+
+    split_manifest = build_split_manifest(train_df, ham_val_df, ham_test_df, random_state=base_seed)
+    if cached_manifest and cached_manifest['image_ids_sha256']['all'] != split_manifest['image_ids_sha256']['all']:
+        raise RuntimeError("Cached split contents do not match split_manifest.json")
+    save_split_manifest(split_manifest, session_dir / 'split_manifest.json')
+    original_priors = {
+        class_name: float((train_df['dx'] == class_name).mean())
+        for class_name in sorted(train_df['dx'].unique())
+    }
+    with open(session_dir / 'class_priors.json', 'w') as f:
+        json.dump(original_priors, f, indent=2)
 
     # 2. Out-of-Domain Validation (PAD-UFES-20)
     if args.external_val_csv and Path(args.external_val_csv).exists():
@@ -378,8 +507,11 @@ def main():
     else:
         print("[dataset] Preparing PAD-UFES-20 validation dataset...")
         pad_dir = ensure_pad_ufes20_download(data_cache) if not pad_ufes_dir.exists() else pad_ufes_dir
-        pad_val_df = load_pad_ufes20_validation(pad_dir)
-        pad_val_df.to_csv(session_dir / 'pad_val_df.csv', index=False)
+        pad_val_df = load_pad_ufes20_validation(pad_dir, session_dir / 'pad_label_mapping.json')
+    pad_val_df, invalid_pad = validate_image_paths(pad_val_df)
+    pad_val_df.to_csv(session_dir / 'pad_val_df.csv', index=False)
+    with open(session_dir / 'invalid_pad_images.json', 'w') as f:
+        json.dump(invalid_pad, f, indent=2)
 
     # Determine Models to Train
     if args.model == 'all':
@@ -397,85 +529,23 @@ def main():
 
     all_results = {}
     for m in models_to_train:
-        # Build model-specific args from benchmark_scenarios.json with CLI overrides
         m_cfg = scenario_models_cfg.get(m, {})
-        model_args = argparse.Namespace(**vars(args))
+        resolved_cfg = resolve_run_config(args, scenario_cfg, m_cfg)
+        if resolved_cfg.seed != base_seed:
+            raise RuntimeError(f"Model seed {resolved_cfg.seed} does not match split seed {base_seed}")
+        model_args = argparse.Namespace(**asdict(resolved_cfg))
 
-        model_args.epochs = args.epochs if args.epochs is not None else m_cfg.get('epochs', 20)
-        model_args.patience = args.patience if args.patience is not None else m_cfg.get('patience', 4)
-        model_args.batch_size = args.batch_size if args.batch_size is not None else m_cfg.get('batch_size', 32)
-        model_args.lr_stage1 = args.lr_stage1 if args.lr_stage1 is not None else m_cfg.get('lr_stage1', None)
-        model_args.lr_stage2 = args.lr_stage2 if args.lr_stage2 is not None else m_cfg.get('lr_stage2', None)
-        model_args.seed = args.seed if args.seed is not None else m_cfg.get('seed', 42)
-
-        # Melanoma Triage Threshold Resolution: CLI argument > model JSON > scenario JSON > default 0.15
-        if args.mel_threshold is not None:
-            model_args.mel_threshold = args.mel_threshold
-        elif 'mel_threshold' in m_cfg:
-            model_args.mel_threshold = m_cfg['mel_threshold']
-        elif 'mel_threshold' in scenario_cfg:
-            model_args.mel_threshold = scenario_cfg['mel_threshold']
-        else:
-            model_args.mel_threshold = 0.15
-
-        # Basal Cell Carcinoma (BCC) Triage Threshold Resolution: CLI argument > model JSON > scenario JSON > default 'youden'
-        if args.bcc_threshold is not None:
-            model_args.bcc_threshold = args.bcc_threshold
-        elif 'bcc_threshold' in m_cfg:
-            model_args.bcc_threshold = m_cfg['bcc_threshold']
-        elif 'bcc_threshold' in scenario_cfg:
-            model_args.bcc_threshold = scenario_cfg['bcc_threshold']
-        else:
-            model_args.bcc_threshold = 'youden'
-
-        # Malignant Screening Threshold Resolution: CLI argument > model JSON > scenario JSON > default None
-        if args.malignant_threshold is not None:
-            model_args.malignant_threshold = args.malignant_threshold
-        elif 'malignant_threshold' in m_cfg:
-            model_args.malignant_threshold = m_cfg['malignant_threshold']
-        elif 'malignant_threshold' in scenario_cfg:
-            model_args.malignant_threshold = scenario_cfg['malignant_threshold']
-        else:
-            model_args.malignant_threshold = None
-
-        # Long-Tail Learning Resolutions (CLI flag > model JSON > scenario JSON > default)
-        if args.balanced_sampling:
-            model_args.balanced_sampling = True
-        elif 'balanced_sampling' in m_cfg:
-            model_args.balanced_sampling = m_cfg['balanced_sampling']
-        elif 'balanced_sampling' in scenario_cfg:
-            model_args.balanced_sampling = scenario_cfg['balanced_sampling']
-        else:
-            model_args.balanced_sampling = False
-
-        if args.logit_adjust is not None:
-            model_args.logit_adjust = args.logit_adjust
-        elif 'logit_adjust' in m_cfg:
-            model_args.logit_adjust = m_cfg['logit_adjust']
-        elif 'logit_adjust' in scenario_cfg:
-            model_args.logit_adjust = scenario_cfg['logit_adjust']
-        else:
-            model_args.logit_adjust = 0.0
-
-        if args.mixup_minority is not None:
-            model_args.mixup_minority = args.mixup_minority
-        elif 'mixup_minority' in m_cfg:
-            model_args.mixup_minority = m_cfg['mixup_minority']
-        elif 'mixup_minority' in scenario_cfg:
-            model_args.mixup_minority = scenario_cfg['mixup_minority']
-        else:
-            model_args.mixup_minority = 0.0
-
-        model_args.use_tta = args.use_tta or m_cfg.get('use_tta', False) or scenario_cfg.get('use_tta', False)
-        model_args.color_constancy = args.color_constancy or m_cfg.get('color_constancy', False) or scenario_cfg.get('color_constancy', False)
+        write_provenance(output_dir / m / 'config.json', resolved_cfg, hw, split_manifest)
 
         print(f"\n⚙️  Configuring {m.upper()} from scenario '{args.scenario}': "
               f"epochs={model_args.epochs}, patience={model_args.patience}, batch_size={model_args.batch_size}, "
               f"lr1={model_args.lr_stage1}, lr2={model_args.lr_stage2}, mel_th={model_args.mel_threshold}, bcc_th={model_args.bcc_threshold}, "
-              f"balanced_sampling={model_args.balanced_sampling}, logit_adjust={model_args.logit_adjust}, mixup={model_args.mixup_minority}, "
+              f"balanced_sampling={model_args.balanced_sampling}, logit_adjust={model_args.logit_adjust}, mixup={model_args.mixup_alpha}, "
               f"tta={model_args.use_tta}, color_constancy={model_args.color_constancy}")
 
-        result = train_single_model(m, model_args, output_dir, hw, train_df, ham_val_df, pad_val_df)
+        result = train_single_model(
+            m, model_args, output_dir, hw, train_df, ham_val_df, ham_test_df, pad_val_df
+        )
         all_results[m] = result
 
     # Summary Benchmark Output when benchmarking multiple models
