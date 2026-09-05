@@ -8,6 +8,7 @@ Dual-Domain Multi-Phase Evaluation Pipeline:
 
 import argparse
 from contextlib import nullcontext
+import hashlib
 import os
 import sys
 import json
@@ -37,11 +38,11 @@ from tqdm import tqdm
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve, auc
 
 from dataset import CLASS_NAMES, NUM_CLASSES
-from metrics import _evaluate_binary_triage, bootstrap_metric_ci, meets_auc_target, restricted_class_accuracy
+from metrics import _evaluate_binary_triage, bootstrap_metric_ci, expected_calibration_error, meets_auc_target, restricted_class_accuracy
 from visualize import (
     plot_training_curves, plot_confusion_matrices,
     plot_per_class_metrics, generate_gradcam_gallery, plot_domain_comparison,
-    plot_roc_curves, plot_dual_roc_comparison
+    plot_roc_curves, plot_dual_roc_comparison, plot_reliability_diagram
 )
 
 
@@ -370,7 +371,7 @@ def evaluate_dataset(
         malignant_threshold: Operating threshold for 2-tier malignancy screening (MEL + BCC + AKIEC).
         logit_adjust: Strength of post-hoc Bayesian prior correction (0.0 to 1.0).
         class_priors: Training set prior distribution array for Logit Adjustment.
-        use_tta: If True, computes 4-view Test-Time Augmentation (orig, hflip, vflip, rot90).
+        use_tta: If True, averages probabilities over original, horizontal-flip, and vertical-flip views.
     """
     model.eval()
     all_preds, all_targets, all_probs = [], [], []
@@ -386,30 +387,16 @@ def evaluate_dataset(
     with torch.no_grad():
         for x, y in loader:
             x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
-            if use_tta:
-                x_h = torch.flip(x, dims=[-1])
-                x_v = torch.flip(x, dims=[-2])
-                x_r = torch.rot90(x, 1, [-2, -1])
-                with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda and autocast else nullcontext():
-                    out1 = model(x)
-                    out2 = model(x_h)
-                    out3 = model(x_v)
-                    out4 = model(x_r)
-                    out = (out1 + out2 + out3 + out4) / 4.0
-                    loss = criterion(out, y)
-            else:
-                with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda and autocast else nullcontext():
-                    out = model(x)
-                    loss = criterion(out, y)
+            views = [x, torch.flip(x, dims=[-1]), torch.flip(x, dims=[-2])] if use_tta else [x]
+            outputs = []
+            with torch.amp.autocast('cuda', dtype=precision_dtype) if has_cuda and autocast else nullcontext():
+                for view in views:
+                    outputs.append(model(view))
+                loss = criterion(torch.stack(outputs).mean(dim=0), y)
 
-            # Apply Post-Hoc Logit Adjustment (Solution B)
-            if log_priors is not None:
-                adj_out = out.float() - float(logit_adjust) * log_priors
-            else:
-                adj_out = out.float()
-
-            probs = torch.softmax(adj_out, dim=1)
-            preds = adj_out.argmax(dim=1)
+            adjusted_outputs = [output.float() - float(logit_adjust) * log_priors if log_priors is not None else output.float() for output in outputs]
+            probs = torch.stack([torch.softmax(output, dim=1) for output in adjusted_outputs]).mean(dim=0)
+            preds = probs.argmax(dim=1)
             all_probs.extend(probs.cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
             all_targets.extend(y.cpu().numpy())
@@ -483,6 +470,8 @@ def evaluate_dataset(
         'macro_auc_roc': macro_auc_roc,
         'per_class_auc': per_class_auc,
         'harmonized_5class_acc': harmonized_5class_acc,
+        'expected_calibration_error': expected_calibration_error(all_probs, all_targets),
+        'mean_mel_probability': float(mel_probs.mean()),
 
         # Melanoma Triage Metrics
         'mel_triage_recall': mel_res['sensitivity'],
@@ -509,6 +498,8 @@ def evaluate_dataset(
         'malignant_triage_spec': mal_res['specificity'],
         'malignant_triage_f1': mal_res['f1'],
         'malignant_triage_threshold': mal_res['threshold'],
+        'malignant_threshold_source': mal_res.get('threshold_source'),
+        'malignant_threshold_fallback': mal_res.get('threshold_fallback', False),
         'malignant_triage_detected': mal_res['detected'],
         'malignant_operating_points': mal_res['operating_points'],
 
@@ -517,6 +508,11 @@ def evaluate_dataset(
         'all_probs': all_probs,
         'report': report
     }
+
+
+def evaluation_accuracy_consistency(final_accuracy: float, selected_epoch_accuracy: float, tolerance: float = 0.05) -> tuple[float, bool]:
+    delta = float(final_accuracy) - float(selected_epoch_accuracy)
+    return delta, abs(delta) > tolerance
 
 
 def json_safe(value):
@@ -636,6 +632,14 @@ def train_single_model(
 
     use_color_constancy = getattr(args, 'color_constancy', False)
     use_tta = getattr(args, 'use_tta', False)
+    eval_precision = str(getattr(args, 'eval_precision', 'fp32')).lower()
+    eval_autocast = eval_precision in ('amp', 'bf16', 'fp16')
+    eval_kwargs = {
+        'logit_adjust': float(getattr(args, 'logit_adjust', 0.0) or 0.0),
+        'class_priors': compute_class_priors(train_df['dx']),
+        'use_tta': use_tta,
+        'autocast': eval_autocast,
+    }
 
     train_transform, preprocessing_cfg = build_transforms(
         raw_model, img_size, train=True, color_constancy=use_color_constancy
@@ -649,7 +653,7 @@ def train_single_model(
         print("  🌈 Illumination Constancy: ENABLED (Shades-of-Gray Minkowski p=6.0)")
 
     if use_tta:
-        print("  🔄 Test-Time Augmentation (TTA): ENABLED (4-view multi-angle inference)")
+        print("  🔄 Test-Time Augmentation (TTA): ENABLED (3-view probability averaging)")
 
     balanced_sampling = getattr(args, 'balanced_sampling', False)
     logit_adjust = float(getattr(args, 'logit_adjust', 0.0) or 0.0)
@@ -783,7 +787,7 @@ def train_single_model(
 
         val_eval = evaluate_dataset(
             model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion,
-            logit_adjust=logit_adjust, class_priors=train_class_priors
+            **eval_kwargs
         )
         val_acc, val_loss = val_eval['accuracy'], val_eval['loss']
         scheduler1.step(val_loss)
@@ -809,7 +813,7 @@ def train_single_model(
 
     s1_ham_eval = evaluate_dataset(
         model, ham_val_loader, device, precision_dtype, has_cuda,
-        logit_adjust=logit_adjust, class_priors=train_class_priors
+        **eval_kwargs
     )
     print(f"\n[Stage 1 Complete] HAM validation Acc: {s1_ham_eval['accuracy']:.2%}\n")
     del optimizer1
@@ -838,12 +842,16 @@ def train_single_model(
     print(f" Trainable parameters: {trainable_params:,}/{total_params:,}")
 
     optimizer2 = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=lr_stage2, weight_decay=weight_decay)
-    scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(optimizer2, mode='min', factor=0.3, patience=3, min_lr=1e-8)
+    optimizer_trainable_params = sum(p.numel() for group in optimizer2.param_groups for p in group['params'])
+    assert optimizer_trainable_params == trainable_params, "Optimizer parameter count does not match trainable parameter count"
+    scheduler2 = optim.lr_scheduler.ReduceLROnPlateau(optimizer2, mode='max', factor=0.3, patience=3, min_lr=1e-8)
 
     print(f"--- Stage 2: Backbone Fine-Tuning (lr={lr_stage2}, epochs={args.epochs}, patience={args.patience}) ---")
     h2 = {'accuracy': [], 'val_accuracy': [], 'loss': [], 'val_loss': [], 'val_mel_auc': [], 'val_macro_auc': [], 'lr': [], 'time_per_epoch': []}
     best_val_loss = float('inf')
     best_val_auc = float('-inf')
+    best_selection_score = float('-inf')
+    selection_min_delta = float(getattr(args, 'selection_min_delta', 0.0005))
     selected_epoch = 0
     patience_counter = 0
     checkpoint_path = model_dir / 'best_model.pth'
@@ -907,10 +915,11 @@ def train_single_model(
 
         val_eval = evaluate_dataset(
             model, ham_val_loader, device, precision_dtype, has_cuda, criterion=criterion,
-            logit_adjust=logit_adjust, class_priors=train_class_priors
+            **eval_kwargs
         )
         val_acc, val_loss = val_eval['accuracy'], val_eval['loss']
-        scheduler2.step(val_loss)
+        selection_score = 0.5 * val_eval['mel_auc_roc'] + 0.5 * val_eval['macro_auc_roc']
+        scheduler2.step(selection_score)
 
         h2['accuracy'].append(train_acc)
         h2['val_accuracy'].append(val_acc)
@@ -927,18 +936,19 @@ def train_single_model(
               f"| lr: {optimizer2.param_groups[0]['lr']:.2e}")
 
         val_auc = val_eval['mel_auc_roc']
-        improved = val_auc > best_val_auc or (np.isclose(val_auc, best_val_auc) and val_loss < best_val_loss)
+        improved = selection_score > best_selection_score + selection_min_delta or (np.isclose(selection_score, best_selection_score) and val_loss < best_val_loss)
         if improved:
             best_val_auc = val_auc
+            best_selection_score = selection_score
             best_val_loss = val_loss
             selected_epoch = epoch + 1
             patience_counter = 0
             torch.save(raw_model.state_dict(), checkpoint_path)
-            print(f"  ⭐ New best checkpoint saved (Mel AUC: {val_auc:.4f}, val_loss: {val_loss:.4f})")
+            print(f"  ⭐ New best checkpoint saved (selection: {selection_score:.4f}, Mel AUC: {val_auc:.4f}, val_loss: {val_loss:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= args.patience:
-                print(f"\n[EarlyStopping] Validation Melanoma AUC did not improve for {args.patience} epochs. Stopping.")
+                print(f"\n[EarlyStopping] Validation composite AUC did not improve for {args.patience} epochs. Stopping.")
                 break
 
     if checkpoint_path.exists():
@@ -955,8 +965,14 @@ def train_single_model(
     ham_val_results = evaluate_dataset(
         model, ham_val_loader, device, precision_dtype, has_cuda,
         mel_threshold=mel_th, bcc_threshold=bcc_th, malignant_threshold=mal_th,
-        logit_adjust=logit_adjust, class_priors=train_class_priors, use_tta=use_tta, autocast=False
+        **eval_kwargs
     )
+    selected_loop_accuracy = h2['val_accuracy'][selected_epoch - 1]
+    ham_val_accuracy_delta, eval_consistency_warning = evaluation_accuracy_consistency(
+        ham_val_results['accuracy'], selected_loop_accuracy
+    )
+    if eval_consistency_warning:
+        print(f"  WARNING: final HAM validation accuracy differs from selected-epoch accuracy by {ham_val_accuracy_delta:+.2%}")
     ham_val_results = add_confidence_intervals(ham_val_results, ham_val_df, seed=int(args.seed))
     calibrated_th = ham_val_results['mel_triage_threshold']
     calibrated_bcc_th = ham_val_results['bcc_triage_threshold']
@@ -965,31 +981,47 @@ def train_single_model(
     ham_results = evaluate_dataset(
         model, ham_test_loader, device, precision_dtype, has_cuda,
         mel_threshold=calibrated_th, bcc_threshold=calibrated_bcc_th, malignant_threshold=calibrated_mal_th,
-        logit_adjust=logit_adjust, class_priors=train_class_priors, use_tta=use_tta, autocast=False
+        **eval_kwargs
     )
     ham_results = add_confidence_intervals(ham_results, ham_test_df, seed=int(args.seed))
     ham_dir = model_dir / 'ham10000'
     save_prediction_artifacts(ham_dir, ham_results, ham_test_df)
+    if use_tta:
+        ham_no_tta = evaluate_dataset(
+            model, ham_test_loader, device, precision_dtype, has_cuda,
+            mel_threshold=calibrated_th, bcc_threshold=calibrated_bcc_th, malignant_threshold=calibrated_mal_th,
+            **{**eval_kwargs, 'use_tta': False}
+        )
+        np.save(ham_dir / 'all_probs_no_tta.npy', ham_no_tta['all_probs'])
     with open(ham_dir / 'classification_report.json', 'w') as f:
         json.dump(ham_results['report'], f, indent=2)
     plot_confusion_matrices(ham_results['all_targets'], ham_results['all_preds'], CLASS_NAMES, ham_dir / 'confusion_matrix.png', model_name=f"{model_name} (HAM10000 Test)")
     plot_per_class_metrics(ham_results['report'], CLASS_NAMES, ham_dir / 'per_class_metrics.png', model_name=f"{model_name} (HAM10000 Test)")
     plot_roc_curves(ham_results['all_targets'], ham_results['all_probs'], CLASS_NAMES, ham_dir / 'roc_curves.png', model_name=f"{model_name} (HAM10000 Test)")
+    plot_reliability_diagram(ham_results['all_probs'], ham_results['all_targets'], ham_dir / 'reliability_diagram.png', model_name=f"{model_name} (HAM10000 Test)")
     generate_gradcam_gallery(model=model, val_df=ham_test_df, class_names=CLASS_NAMES, img_size=img_size, output_path=ham_dir / 'gradcam_heatmaps.png', model_name=f"{model_name}_HAM", device=device, transform=val_transform)
 
     pad_results = evaluate_dataset(
         model, pad_val_loader, device, precision_dtype, has_cuda,
         mel_threshold=calibrated_th, bcc_threshold=calibrated_bcc_th, malignant_threshold=calibrated_mal_th,
-        logit_adjust=logit_adjust, class_priors=train_class_priors, use_tta=use_tta, autocast=False
+        **eval_kwargs
     )
     pad_results = add_confidence_intervals(pad_results, pad_val_df, seed=int(args.seed))
     pad_dir = model_dir / 'pad_ufes_20'
     save_prediction_artifacts(pad_dir, pad_results, pad_val_df)
+    if use_tta:
+        pad_no_tta = evaluate_dataset(
+            model, pad_val_loader, device, precision_dtype, has_cuda,
+            mel_threshold=calibrated_th, bcc_threshold=calibrated_bcc_th, malignant_threshold=calibrated_mal_th,
+            **{**eval_kwargs, 'use_tta': False}
+        )
+        np.save(pad_dir / 'all_probs_no_tta.npy', pad_no_tta['all_probs'])
     with open(pad_dir / 'classification_report.json', 'w') as f:
         json.dump(pad_results['report'], f, indent=2)
     plot_confusion_matrices(pad_results['all_targets'], pad_results['all_preds'], CLASS_NAMES, pad_dir / 'confusion_matrix.png', model_name=f"{model_name} (PAD-UFES-20)")
     plot_per_class_metrics(pad_results['report'], CLASS_NAMES, pad_dir / 'per_class_metrics.png', model_name=f"{model_name} (PAD-UFES-20)")
     plot_roc_curves(pad_results['all_targets'], pad_results['all_probs'], CLASS_NAMES, pad_dir / 'roc_curves.png', model_name=f"{model_name} (PAD-UFES-20)")
+    plot_reliability_diagram(pad_results['all_probs'], pad_results['all_targets'], pad_dir / 'reliability_diagram.png', model_name=f"{model_name} (PAD-UFES-20)")
     generate_gradcam_gallery(model=model, val_df=pad_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=pad_dir / 'gradcam_heatmaps.png', model_name=f"{model_name}_PAD", device=device, transform=val_transform)
 
     shared_indices = [CLASS_NAMES.index(c) for c in ['akiec', 'bcc', 'bkl', 'mel', 'nv']]
@@ -997,7 +1029,7 @@ def train_single_model(
     pad_oracle = evaluate_dataset(
         model, pad_val_loader, device, precision_dtype, has_cuda,
         mel_threshold='youden', bcc_threshold='youden', malignant_threshold='youden',
-        logit_adjust=logit_adjust, class_priors=train_class_priors, use_tta=use_tta, autocast=False
+        **eval_kwargs
     )
 
     plot_training_curves([h1, h2], ['Stage 1 (Head)', 'Stage 2 (Fine-Tune)'], model_dir / 'training_curves.png', model_name=model_name)
@@ -1009,6 +1041,7 @@ def train_single_model(
     ham_macro_auc_5class = float(np.mean([ham_results['per_class_auc'][c] for c in ['akiec', 'bcc', 'bkl', 'mel', 'nv']]))
     macro_auc_gap = ham_macro_auc_5class - pad_results['macro_auc_roc']
     mel_sens_gap = ham_results['mel_triage_recall'] - pad_results['mel_triage_recall']
+    checkpoint_sha256 = hashlib.sha256(checkpoint_path.read_bytes()).hexdigest()
 
     full_results = {
         'model': model_name,
@@ -1018,11 +1051,16 @@ def train_single_model(
         'batch_strategy': batch_strategy,
         'params': sum(p.numel() for p in model.parameters()),
         'trainable_params': trainable_params,
+        'optimizer_trainable_params': optimizer_trainable_params,
+        'checkpoint_sha256': checkpoint_sha256,
         'preprocessing': preprocessing_cfg,
-        'eval_precision': 'fp32',
-        'selection_metric': 'ham_val_mel_auc_roc',
-        'selection_score': best_val_auc,
+        'eval_precision': eval_precision,
+        'selection_metric': '0.5_ham_val_mel_auc_roc_plus_0.5_ham_val_macro_auc_roc',
+        'selection_score': best_selection_score,
         'selected_epoch': selected_epoch,
+        'selected_epoch_loop_accuracy': selected_loop_accuracy,
+        'ham_val_accuracy_delta': ham_val_accuracy_delta,
+        'eval_consistency_warning': eval_consistency_warning,
         'mel_triage_threshold': calibrated_th,
         'bcc_triage_threshold': calibrated_bcc_th,
         'malignant_triage_threshold': calibrated_mal_th,
@@ -1043,6 +1081,8 @@ def train_single_model(
         'ham_val_macro_auc_roc': ham_val_results['macro_auc_roc'],
         'ham_val_macro_auc_ci_low': ham_val_results['macro_auc_ci_low'],
         'ham_val_macro_auc_ci_high': ham_val_results['macro_auc_ci_high'],
+        'ham_val_expected_calibration_error': ham_val_results['expected_calibration_error'],
+        'ham_val_mean_mel_probability': ham_val_results['mean_mel_probability'],
 
         # Stage 2 In-Domain HAM10000 Test Metrics
         'ham_accuracy': ham_results['accuracy'],
@@ -1063,6 +1103,7 @@ def train_single_model(
         'ham_test_macro_auc_ci_low': ham_results['macro_auc_ci_low'],
         'ham_test_macro_auc_ci_high': ham_results['macro_auc_ci_high'],
         'ham_harmonized_5class_acc': ham_results['harmonized_5class_acc'],
+        'ham_expected_calibration_error': ham_results['expected_calibration_error'],
         'ham_test_macro_auc_5class': ham_macro_auc_5class,
         'ham_mel_triage_recall': ham_results['mel_triage_recall'],
         'ham_mel_triage_spec': ham_results['mel_triage_spec'],
@@ -1095,6 +1136,7 @@ def train_single_model(
         'pad_macro_auc_roc': pad_results['macro_auc_roc'],
         'pad_harmonized_5class_acc': pad_results['harmonized_5class_acc'],
         'pad_restricted_5class_acc': pad_results['restricted_5class_acc'],
+        'pad_expected_calibration_error': pad_results['expected_calibration_error'],
         'pad_oracle_mel_triage_threshold': pad_oracle['mel_triage_threshold'],
         'pad_oracle_mel_triage_recall': pad_oracle['mel_triage_recall'],
         'pad_oracle_mel_triage_spec': pad_oracle['mel_triage_spec'],
@@ -1123,6 +1165,7 @@ def train_single_model(
         'mel_sens_gap': float(mel_sens_gap),
         'mel_threshold_source': ham_val_results.get('mel_threshold_source'),
         'bcc_threshold_source': ham_val_results.get('bcc_threshold_source'),
+        'malignant_threshold_source': ham_val_results.get('malignant_threshold_source'),
         'meets_auc_target_ham': meets_auc_target(ham_results['mel_auc_ci_low']),
         'meets_auc_target_pad': meets_auc_target(pad_results['mel_auc_ci_low']),
         'peak_vram_allocated_gb': torch.cuda.max_memory_allocated(device) / (1024 ** 3) if has_cuda else 0.0,

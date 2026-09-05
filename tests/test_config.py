@@ -22,6 +22,8 @@ def _args(**overrides):
         'use_tta': False,
         'color_constancy': False,
         'stage1_epochs': None,
+        'eval_precision': None,
+        'selection_min_delta': None,
         'no_cudnn': False,
     }
     values.update(overrides)
@@ -29,12 +31,14 @@ def _args(**overrides):
 
 
 def test_config_precedence():
-    scenario = {'epochs': 30, 'batch_size': 16, 'mel_threshold': 'youden', 'mixup_alpha': 0.2, 'balanced_sampling': True, 'use_tta': True}
+    scenario = {'epochs': 30, 'batch_size': 16, 'mel_threshold': 'sens90', 'mixup_alpha': 0.2, 'balanced_sampling': True, 'use_tta': True, 'eval_precision': 'amp', 'selection_min_delta': 0.001}
     model = {'epochs': 20, 'batch_size': 24}
     config = resolve_run_config(_args(epochs=10), scenario, model)
     assert config.epochs == 10
     assert config.batch_size == 24
-    assert config.mel_threshold == 'youden'
+    assert config.mel_threshold == 'sens90'
+    assert config.eval_precision == 'amp'
+    assert config.selection_min_delta == 0.001
     assert config.mixup_alpha == 0.2
     assert config.balanced_sampling
     assert config.use_tta

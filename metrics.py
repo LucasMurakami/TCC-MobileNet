@@ -197,6 +197,26 @@ def compute_classification_metrics(probs, targets, class_names: Sequence[str]) -
     return metrics
 
 
+def expected_calibration_error(probs, targets, n_bins: int = 15) -> float:
+    probs_array = np.asarray(probs, dtype=float)
+    targets_array = np.asarray(targets)
+    if probs_array.ndim != 2 or targets_array.ndim != 1 or len(probs_array) != len(targets_array):
+        raise ValueError("targets must be one-dimensional and match two-dimensional probs")
+    if len(targets_array) == 0 or n_bins < 1:
+        raise ValueError("inputs must not be empty and n_bins must be positive")
+    confidence = probs_array.max(axis=1)
+    predictions = probs_array.argmax(axis=1)
+    correct = predictions == targets_array
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    error = 0.0
+    for index in range(n_bins):
+        lower, upper = edges[index], edges[index + 1]
+        mask = (confidence >= lower) & (confidence < upper if index < n_bins - 1 else confidence <= upper)
+        if np.any(mask):
+            error += float(mask.mean()) * abs(float(correct[mask].mean()) - float(confidence[mask].mean()))
+    return error
+
+
 def restricted_class_accuracy(probs, targets, class_indices: Sequence[int]) -> float:
     probs_array = np.asarray(probs, dtype=float)
     targets_array = np.asarray(targets)

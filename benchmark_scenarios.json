@@ -2,11 +2,14 @@
   "scenarios": {
     "standard": {
       "name": "Standard (20 Epochs Production)",
-      "description": "20 Epochs, Patience 4, efficient convergence check balancing training throughput and high accuracy.",
+      "description": "Production benchmark with model-specific budgets, fixed-sensitivity calibration, and consistent AMP evaluation.",
       "priority": 1,
       "optional": false,
-      "mel_threshold": "youden",
-      "bcc_threshold": "youden",
+      "mel_threshold": "sens90",
+      "bcc_threshold": "sens90",
+      "malignant_threshold": "sens90",
+      "eval_precision": "amp",
+      "selection_min_delta": 0.0005,
       "balanced_sampling": true,
       "logit_adjust": 0.0,
       "mixup_alpha": 0.2,
@@ -37,30 +40,33 @@
           "seed": 42
         },
         "v4": {
-          "epochs": 20,
+          "epochs": 30,
           "batch_size": 32,
           "lr_stage1": 0.001,
-          "lr_stage2": 0.00005,
-          "patience": 4,
+          "lr_stage2": 0.00002,
+          "patience": 6,
           "seed": 42
         },
         "v5": {
-          "epochs": 20,
+          "epochs": 40,
           "batch_size": 32,
           "lr_stage1": 0.0005,
-          "lr_stage2": 0.00002,
-          "patience": 4,
+          "lr_stage2": 0.00003,
+          "patience": 6,
           "seed": 42
         }
       }
     },
     "medium": {
       "name": "Medium (Balanced Research Budget)",
-      "description": "30 Epochs, Patience 5, optimal compute-to-accuracy ratio for standard evaluation.",
+      "description": "Balanced research budget with extended V5 convergence and stabilized V4 early stopping.",
       "priority": 2,
       "optional": false,
-      "mel_threshold": "youden",
-      "bcc_threshold": "youden",
+      "mel_threshold": "sens90",
+      "bcc_threshold": "sens90",
+      "malignant_threshold": "sens90",
+      "eval_precision": "amp",
+      "selection_min_delta": 0.0005,
       "balanced_sampling": true,
       "logit_adjust": 0.0,
       "mixup_alpha": 0.2,
@@ -94,16 +100,16 @@
           "epochs": 30,
           "batch_size": 32,
           "lr_stage1": 0.001,
-          "lr_stage2": 0.00005,
-          "patience": 5,
+          "lr_stage2": 0.00002,
+          "patience": 6,
           "seed": 42
         },
         "v5": {
-          "epochs": 30,
+          "epochs": 40,
           "batch_size": 32,
           "lr_stage1": 0.0005,
-          "lr_stage2": 0.00002,
-          "patience": 5,
+          "lr_stage2": 0.00003,
+          "patience": 6,
           "seed": 42
         }
       }
@@ -113,8 +119,11 @@
       "description": "15 Epochs, Patience 3, rapid baseline profiling for lightweight execution.",
       "priority": 3,
       "optional": false,
-      "mel_threshold": "youden",
-      "bcc_threshold": "youden",
+      "mel_threshold": "sens90",
+      "bcc_threshold": "sens90",
+      "malignant_threshold": "sens90",
+      "eval_precision": "amp",
+      "selection_min_delta": 0.0005,
       "balanced_sampling": true,
       "logit_adjust": 0.0,
       "mixup_alpha": 0.2,

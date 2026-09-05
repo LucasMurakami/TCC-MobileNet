@@ -24,9 +24,6 @@ import torch
 import torch.nn as nn
 from torchvision import transforms
 
-torch.backends.cudnn.enabled = False
-
-
 # ─── 1. Training & Validation Curves ──────────────────────────────────────────
 
 def plot_training_curves(
@@ -178,6 +175,33 @@ def plot_per_class_metrics(
     return fig
 
 
+def plot_reliability_diagram(probs: np.ndarray, targets: np.ndarray, output_path: Union[str, Path], model_name: str = "Model", n_bins: int = 15):
+    confidence = probs.max(axis=1)
+    correct = probs.argmax(axis=1) == targets
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    centers = (edges[:-1] + edges[1:]) / 2
+    accuracy = np.full(n_bins, np.nan)
+    counts = np.zeros(n_bins)
+    for index in range(n_bins):
+        mask = (confidence >= edges[index]) & (confidence < edges[index + 1] if index < n_bins - 1 else confidence <= edges[index + 1])
+        counts[index] = mask.sum()
+        if np.any(mask):
+            accuracy[index] = correct[mask].mean()
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    axes[0].plot([0, 1], [0, 1], linestyle='--', color='gray')
+    axes[0].plot(centers, accuracy, marker='o', color='#1f77b4')
+    axes[0].set(xlabel='Confidence', ylabel='Accuracy', title=f'{model_name} Reliability', xlim=(0, 1), ylim=(0, 1))
+    axes[0].grid(alpha=0.25)
+    axes[1].bar(centers, counts, width=1 / n_bins * 0.9, color='#1f77b4')
+    axes[1].set(xlabel='Confidence', ylabel='Samples', title='Confidence Distribution', xlim=(0, 1))
+    fig.tight_layout()
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=180, bbox_inches='tight')
+    plt.close(fig)
+
+
 # ─── 4. PyTorch Grad-CAM & Grad-CAM++ Engine ─────────────────────────────────
 
 try:
@@ -200,12 +224,15 @@ def find_gradcam_target_layer(model: nn.Module) -> Optional[nn.Module]:
         'se.', '.se.', 'conv_reduce', 'conv_expand', 'se_module', 'squeeze', 'excitation'
     )
 
-    # 0. MobileNetV5 / Gemma3n: target MSFA norm layer (the multi-scale fused layer before pooling)
+    # 0. MobileNetV5 / Gemma3n: target the final pre-normalization spatial convolution
     if hasattr(raw_model, 'msfa'):
-        if hasattr(raw_model.msfa, 'norm'):
-            return raw_model.msfa.norm
-        elif hasattr(raw_model.msfa, 'ffn') and hasattr(raw_model.msfa.ffn, 'pw_proj'):
+        if hasattr(raw_model.msfa, 'ffn') and hasattr(raw_model.msfa.ffn, 'pw_proj'):
             return raw_model.msfa.ffn.pw_proj.conv
+        if hasattr(raw_model, 'blocks') and len(raw_model.blocks) >= 4:
+            stage = raw_model.blocks[3]
+            candidates = [module for module in stage.modules() if isinstance(module, nn.Conv2d)]
+            if candidates:
+                return candidates[-1]
         return raw_model.msfa
 
     # 1. Primary priority: The last convolutional layer in blocks[-1] (the final spatial feature extraction stage)
@@ -244,10 +271,8 @@ def find_gradcam_target_layer(model: nn.Module) -> Optional[nn.Module]:
 
 class PyTorchGradCAM:
     """
-    Robust Grad-CAM / Multi-Scale HiResCAM activation mapping engine for PyTorch/timm CNNs & Foundation Vision models.
-    - MobileNet V1, V2, V3, V4: Standard high-fidelity spatial Grad-CAM / Grad-CAM++ on deepest conv stage.
-    - MobileNet V5 (Gemma3n Vision): Multi-Scale Layer-Fused HiResCAM (Stage 2 + Stage 3) with adaptive background
-      percentile thresholding to eliminate diffuse Vision Transformer token noise.
+    Robust Grad-CAM / Grad-CAM++ activation mapping engine for PyTorch/timm vision models.
+    Uses the final pre-normalization spatial convolution for MobileNetV5 and the deepest convolutional stage for other backbones.
     """
     def __init__(self, model: nn.Module, target_layer: Optional[nn.Module] = None):
         self.model = model
@@ -255,11 +280,6 @@ class PyTorchGradCAM:
         self.activations = None
         self.gradients = None
         self.hook_handle = None
-        self.s2_target = None
-        self.s2_hook_handle = None
-        self.s2_activations = None
-        self.s2_gradients = None
-
         raw_model = model.module if hasattr(model, 'module') else model
 
         # Disable in-place activations to guarantee backward gradient flow to hooked outputs
@@ -270,17 +290,6 @@ class PyTorchGradCAM:
         if self.target_layer is not None:
             self.hook_handle = self.target_layer.register_forward_hook(self._forward_hook)
 
-        # For MobileNetV5 / Gemma3n Vision Transformers: also hook Stage 2 for high-resolution spatial boundary fusion
-        is_v5 = hasattr(raw_model, 'msfa') or any('msfa' in n.lower() for n, _ in raw_model.named_modules())
-        if is_v5 and hasattr(raw_model, 'blocks') and len(raw_model.blocks) >= 3:
-            s2_block = raw_model.blocks[2][-1]
-            if hasattr(s2_block, 'pw_proj') and hasattr(s2_block.pw_proj, 'conv'):
-                self.s2_target = s2_block.pw_proj.conv
-            else:
-                s2_convs = [m for m in s2_block.modules() if isinstance(m, nn.Conv2d)]
-                self.s2_target = s2_convs[-1] if s2_convs else s2_block
-            self.s2_hook_handle = self.s2_target.register_forward_hook(self._s2_forward_hook)
-
     def _forward_hook(self, module, inp, out):
         self.activations = out.clone()
         if out.requires_grad:
@@ -289,20 +298,9 @@ class PyTorchGradCAM:
     def _tensor_backward_hook(self, grad):
         self.gradients = grad.clone()
 
-    def _s2_forward_hook(self, module, inp, out):
-        self.s2_activations = out.clone()
-        if out.requires_grad:
-            out.register_hook(self._s2_tensor_backward_hook)
-
-    def _s2_tensor_backward_hook(self, grad):
-        self.s2_gradients = grad.clone()
-
     def __call__(self, x: torch.Tensor, target_class: Optional[int] = None) -> tuple:
         self.activations = None
         self.gradients = None
-        self.s2_activations = None
-        self.s2_gradients = None
-
         orig_states = [p.requires_grad for p in self.model.parameters()]
         for p in self.model.parameters():
             p.requires_grad = True
@@ -329,85 +327,34 @@ class PyTorchGradCAM:
                     H, W = x.shape[2], x.shape[3]
                     eps = 1e-7
 
-                    # Check if model has Vision Transformer / MSFA architecture (MobileNetV5)
-                    raw_model = self.model.module if hasattr(self.model, 'module') else self.model
-                    is_v5_or_msfa = hasattr(raw_model, 'msfa') or any('msfa' in n.lower() for n, _ in raw_model.named_modules())
+                    weights = torch.mean(grads, dim=(2, 3), keepdim=True)
+                    cam = torch.relu(torch.sum(weights * acts, dim=1, keepdim=True))
 
-                    if is_v5_or_msfa:
-                        # 🌟 Jacob Gil LayerCAM on Multi-Scale Fusion Adapter (MSFA) Norm Layer for MobileNetV5
-                        # Weights: element-wise positive gradients
-                        w = torch.relu(grads)
-                        cam = torch.relu((w * acts).sum(dim=1, keepdim=True))
+                    if cam.max() < eps:
+                        grads_power_2 = grads.pow(2)
+                        grads_power_3 = grads.pow(3)
+                        sum_acts = acts.sum(dim=(2, 3), keepdim=True)
+                        aij = grads_power_2 / (2.0 * grads_power_2 + sum_acts * grads_power_3 + eps)
+                        aij = torch.where(grads != 0, aij, torch.zeros_like(aij))
+                        weights_pp = torch.sum(aij * torch.relu(grads), dim=(2, 3), keepdim=True)
+                        cam = torch.relu(torch.sum(weights_pp * acts, dim=1, keepdim=True))
 
-                        if cam.max() <= eps:
-                            # Fallback 1: Standard alpha-averaged Grad-CAM weights
-                            alpha = grads.mean(dim=(2, 3), keepdim=True)
-                            cam = torch.relu((alpha * acts).sum(dim=1, keepdim=True))
+                    if cam.max() < eps:
+                        cam = torch.mean(acts.abs(), dim=1, keepdim=True)
 
-                        if cam.max() <= eps:
-                            # Fallback 2: Absolute gradient magnitude
-                            cam = torch.relu((torch.abs(grads) * torch.relu(acts)).sum(dim=1, keepdim=True))
+                    cam = cam - cam.min()
+                    max_val = cam.max()
+                    if max_val > eps:
+                        cam = cam / max_val
 
-                        # Bilinear upsample to input resolution
-                        cam_up = nn.functional.interpolate(cam, size=(H, W), mode='bilinear', align_corners=False)
+                    cam = nn.functional.interpolate(cam, size=(H, W), mode='bilinear', align_corners=False)
+                    heatmap_np = cam[0, 0].detach().cpu().numpy()
 
-                        # High-resolution boundary fusion with Stage 2 (if available)
-                        if self.s2_activations is not None and self.s2_gradients is not None:
-                            s2_acts = self.s2_activations.float()
-                            s2_grads = self.s2_gradients.float()
-                            w_s2 = torch.relu(s2_grads)
-                            cam_s2 = torch.relu((w_s2 * s2_acts).sum(dim=1, keepdim=True))
-                            if cam_s2.max() > eps:
-                                cam_s2_up = nn.functional.interpolate(cam_s2, size=(H, W), mode='bilinear', align_corners=False)
-                                cam_s2_norm = (cam_s2_up - cam_s2_up.min()) / (cam_s2_up.max() - cam_s2_up.min() + eps)
-                                cam_msfa_norm = (cam_up - cam_up.min()) / (cam_up.max() - cam_up.min() + eps)
-                                cam_up = 0.75 * cam_msfa_norm + 0.25 * cam_s2_norm
-
-                        heatmap_np = cam_up[0, 0].detach().cpu().numpy()
-
-                        if heatmap_np.max() > eps:
-                            heatmap_np = (heatmap_np - heatmap_np.min()) / (heatmap_np.max() - heatmap_np.min())
-
-                        if gaussian_filter is not None:
-                            heatmap_np = gaussian_filter(heatmap_np, sigma=1.2)
-                            if heatmap_np.max() > eps:
-                                heatmap_np = (heatmap_np - heatmap_np.min()) / (heatmap_np.max() - heatmap_np.min())
-                    else:
-                        # Standard Grad-CAM for CNNs (MobileNet V1, V2, V3, V4)
-                        weights = torch.mean(grads, dim=(2, 3), keepdim=True)
-                        cam = torch.sum(weights * acts, dim=1, keepdim=True)
-                        cam = torch.relu(cam)
-
-                        # Fallback to Grad-CAM++ if standard Grad-CAM yields all zeros
-                        if cam.max() < eps:
-                            grads_power_2 = grads.pow(2)
-                            grads_power_3 = grads.pow(3)
-                            sum_acts = acts.sum(dim=(2, 3), keepdim=True)
-                            aij = grads_power_2 / (2.0 * grads_power_2 + sum_acts * grads_power_3 + eps)
-                            aij = torch.where(grads != 0, aij, torch.zeros_like(aij))
-                            weights_pp = torch.sum(aij * torch.relu(grads), dim=(2, 3), keepdim=True)
-                            cam = torch.relu(torch.sum(weights_pp * acts, dim=1, keepdim=True))
-
-                        # Fallback to activation energy if gradients are fully saturated
-                        if cam.max() < eps:
-                            cam = torch.mean(acts.abs(), dim=1, keepdim=True)
-
-                        # Min-Max Normalization to [0, 1]
-                        cam = cam - cam.min()
-                        max_val = cam.max()
-                        if max_val > eps:
-                            cam = cam / max_val
-
-                        # Interpolate to input image resolution
-                        cam = nn.functional.interpolate(cam, size=(H, W), mode='bilinear', align_corners=False)
-                        heatmap_np = cam[0, 0].detach().cpu().numpy()
-
-                        # Gaussian Spatial Smoothing
-                        if gaussian_filter is not None:
-                            heatmap_np = gaussian_filter(heatmap_np, sigma=1.2)
-                            h_max = heatmap_np.max()
-                            if h_max > eps:
-                                heatmap_np = (heatmap_np - heatmap_np.min()) / (h_max - heatmap_np.min())
+                    if gaussian_filter is not None:
+                        heatmap_np = gaussian_filter(heatmap_np, sigma=max(H, W) / 200.0)
+                        h_max = heatmap_np.max()
+                        if h_max > eps:
+                            heatmap_np = (heatmap_np - heatmap_np.min()) / (h_max - heatmap_np.min())
 
                 probs_np = out.softmax(dim=1)[0].detach().cpu().numpy()
 
@@ -424,12 +371,6 @@ class PyTorchGradCAM:
             except Exception:
                 pass
             self.hook_handle = None
-        if self.s2_hook_handle is not None:
-            try:
-                self.s2_hook_handle.remove()
-            except Exception:
-                pass
-            self.s2_hook_handle = None
 
 
 def overlay_gradcam(original_img: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45, colormap: str = 'jet') -> np.ndarray:

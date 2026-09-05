@@ -23,7 +23,7 @@ MODEL_CONFIGS = {
     'v2': {'timm_name': 'mobilenetv2_100', 'input_size': 224, 'display_name': 'MobileNet V2'},
     'v3': {'timm_name': 'mobilenetv3_large_100', 'input_size': 224, 'display_name': 'MobileNet V3 Large'},
     'v4': {'timm_name': 'mobilenetv4_conv_medium.e500_r256_in1k', 'input_size': 256, 'display_name': 'MobileNet V4 Conv'},
-    'v5': {'timm_name': 'mobilenetv5_300m.gemma3n', 'input_size': 256, 'display_name': 'MobileNet V5 (MSFA LayerCAM)'},
+    'v5': {'timm_name': 'mobilenetv5_300m.gemma3n', 'input_size': 256, 'display_name': 'MobileNet V5 (Pre-Norm Grad-CAM)'},
 }
 
 import argparse

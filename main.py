@@ -51,6 +51,7 @@ class RunConfig:
     color_constancy: bool
     stage1_epochs: int
     eval_precision: str
+    selection_min_delta: float
     no_cudnn: bool
 
 
@@ -71,9 +72,9 @@ def resolve_run_config(args, scenario_cfg: dict, model_cfg: dict) -> RunConfig:
         lr_stage2=value('lr_stage2'),
         seed=int(value('seed', 42)),
         img_size=value('img_size'),
-        mel_threshold=value('mel_threshold', 0.15),
-        bcc_threshold=value('bcc_threshold', 'youden'),
-        malignant_threshold=value('malignant_threshold'),
+        mel_threshold=value('mel_threshold', 'sens90'),
+        bcc_threshold=value('bcc_threshold', 'sens90'),
+        malignant_threshold=value('malignant_threshold', 'sens90'),
         balanced_sampling=bool(getattr(args, 'balanced_sampling', False) or model_cfg.get('balanced_sampling', scenario_cfg.get('balanced_sampling', False))),
         logit_adjust=float(value('logit_adjust', 0.0) or 0.0),
         mixup_alpha=float(value('mixup_alpha', value('mixup_minority', 0.0)) or 0.0),
@@ -81,6 +82,7 @@ def resolve_run_config(args, scenario_cfg: dict, model_cfg: dict) -> RunConfig:
         color_constancy=bool(getattr(args, 'color_constancy', False) or model_cfg.get('color_constancy', scenario_cfg.get('color_constancy', False))),
         stage1_epochs=int(value('stage1_epochs', 3)),
         eval_precision=str(value('eval_precision', 'fp32')),
+        selection_min_delta=max(0.0, float(value('selection_min_delta', 0.0005))),
         no_cudnn=bool(getattr(args, 'no_cudnn', False)),
     )
 
@@ -189,14 +191,14 @@ def print_banner(hw: dict, session_dir: Path, scenario: str):
 def print_leaderboard(all_results: dict):
     """Prints a formatted benchmark leaderboard for multi-model runs."""
     print("\n" + "=" * 85)
-    print(f"  {'Model':<10} {'HAM10000 Acc':<15} {'PAD-UFES Acc':<15} {'Mel Recall (PAD)':<18} {'Mel AUC-ROC':<15}")
+    print(f"  {'Model':<10} {'HAM Mel AUC':<15} {'PAD Mel AUC':<15} {'PAD Macro AUC':<16} {'PAD Triage Sens':<18}")
     print("=" * 85)
     for m in all_results:
-        ham_acc = all_results[m].get('ham_accuracy', 0.0)
-        pad_acc = all_results[m].get('pad_accuracy', 0.0)
-        mel_rec = all_results[m].get('pad_mel_recall', 0.0)
-        mel_auc = all_results[m].get('pad_mel_auc_roc', 0.0)
-        print(f"  {m:<10} {ham_acc:<15.2%} {pad_acc:<15.2%} {mel_rec:<18.2%} {mel_auc:<15.4f}")
+        ham_auc = all_results[m].get('ham_mel_auc_roc', 0.0)
+        pad_auc = all_results[m].get('pad_mel_auc_roc', 0.0)
+        pad_macro_auc = all_results[m].get('pad_macro_auc_roc', 0.0)
+        mel_rec = all_results[m].get('pad_mel_triage_recall', 0.0)
+        print(f"  {m:<10} {ham_auc:<15.4f} {pad_auc:<15.4f} {pad_macro_auc:<16.4f} {mel_rec:<18.2%}")
     print("=" * 85)
     best_m = max(all_results, key=lambda k: all_results[k].get('pad_mel_auc_roc', 0.0))
     print(f"🏆 Best Out-of-Domain Melanoma Model: {best_m.upper()} (PAD AUC: {all_results[best_m]['pad_mel_auc_roc']:.4f})\n")
@@ -240,8 +242,14 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
                 'scenario': scenario_name,
                 'model': model_name,
                 'ham_accuracy': round(ham_acc, 4),
-                'accuracy': round(pad_acc, 4),
-                'domain_gap': round(gap, 4),
+                'pad_restricted_5class_acc': round(float(data.get('pad_restricted_5class_acc', 0.0)), 4),
+                'pad_macro_auc_roc': round(float(data.get('pad_macro_auc_roc', 0.0)), 4),
+                'checkpoint_sha256': data.get('checkpoint_sha256'),
+                'selected_epoch': data.get('selected_epoch'),
+                'selected_loop_acc': round(float(data.get('selected_epoch_loop_accuracy', 0.0)), 4),
+                'final_ham_val_acc': round(float(data.get('ham_val_accuracy', 0.0)), 4),
+                'eval_acc_delta': round(float(data.get('ham_val_accuracy_delta', 0.0)), 4),
+                'eval_warning': bool(data.get('eval_consistency_warning', False)),
                 'ham_mel_auc_roc': round(float(data.get('ham_test_mel_auc_roc', data.get('ham_mel_auc_roc', 0.0))), 4),
                 'ham_mel_auc_ci_low': round(float(data.get('ham_test_mel_auc_ci_low', 0.0)), 4),
                 'ham_mel_auc_ci_high': round(float(data.get('ham_test_mel_auc_ci_high', 0.0)), 4),
@@ -269,6 +277,13 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
         except Exception as e:
             print(f"Warning: could not parse {rf}: {e}")
 
+    seen_checkpoints = {}
+    for run_name, result in all_results_dict.items():
+        checkpoint_hash = result.get('checkpoint_sha256')
+        result['duplicate_of'] = seen_checkpoints.get(checkpoint_hash) if checkpoint_hash else None
+        if checkpoint_hash and checkpoint_hash not in seen_checkpoints:
+            seen_checkpoints[checkpoint_hash] = run_name
+
     df = pd.DataFrame(records)
     if not df.empty:
         df = df.sort_values(by=['mel_auc_roc', 'ham_mel_auc_roc'], ascending=[False, False])
@@ -278,6 +293,11 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
         header = '| ' + ' | '.join(df.columns) + ' |\n| ' + ' | '.join([':---' for _ in df.columns]) + ' |\n'
         rows = '\n'.join(['| ' + ' | '.join(str(val) for val in row) + ' |' for row in df.values])
         table_md = header + rows
+        consistency_columns = ['scenario', 'model', 'selected_epoch', 'selected_loop_acc', 'final_ham_val_acc', 'eval_acc_delta', 'eval_warning']
+        consistency_df = df[consistency_columns]
+        consistency_header = '| ' + ' | '.join(consistency_columns) + ' |\n| ' + ' | '.join([':---' for _ in consistency_columns]) + ' |\n'
+        consistency_rows = '\n'.join(['| ' + ' | '.join(str(value) for value in row) + ' |' for row in consistency_df.values])
+        consistency_md = consistency_header + consistency_rows
 
         summary_md = f"""# 🏆 Skin Lesion Benchmark: Session Leaderboard ({session_dir.name})
 
@@ -286,6 +306,10 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
 ### 📊 Top Performing Hyperparameter Configurations (Dual-Domain)
 
 {table_md}
+
+### Evaluation consistency
+
+{consistency_md}
 
 ---
 """
@@ -402,9 +426,11 @@ def parse_args():
     parser.add_argument('--mixup-alpha', '--mixup-minority', dest='mixup_alpha', type=float, default=None,
                         help="Beta-distribution alpha parameter for Mixup data augmentation.")
     parser.add_argument('--stage1-epochs', type=int, default=None, help='Classifier-head warmup epochs')
+    parser.add_argument('--eval-precision', choices=['fp32', 'amp'], default=None, help='Precision used consistently for validation and final evaluation')
+    parser.add_argument('--selection-min-delta', type=float, default=None, help='Minimum composite AUC improvement required to reset early stopping')
     parser.add_argument('--no-cudnn', action='store_true', default=False, help='Disable cuDNN compatibility path')
     parser.add_argument('--use-tta', action='store_true', default=False,
-                        help="Enable 4-view Test-Time Augmentation (orig, hflip, vflip, rot90) during evaluation.")
+                        help="Enable 3-view probability-averaged TTA (original, horizontal flip, vertical flip) during evaluation.")
     parser.add_argument('--color-constancy', action='store_true', default=False,
                         help="Enable Shades-of-Gray Minkowski color constancy transform to standardize cross-domain illumination.")
     parser.add_argument('--output-dir', type=str, default=None, help='Custom output directory (overrides auto-session)')
@@ -435,8 +461,6 @@ def main():
 
     # Global Random Seed
     base_seed = args.seed if args.seed is not None else 42
-    if base_seed != 42:
-        raise SystemExit("This thesis pipeline uses the single fixed seed 42")
     np.random.seed(base_seed)
     torch.manual_seed(base_seed)
     if torch.cuda.is_available():

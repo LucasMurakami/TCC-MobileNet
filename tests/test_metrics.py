@@ -15,6 +15,7 @@ from metrics import (
     bootstrap_metric_ci,
     compute_classification_metrics,
     evaluate_binary_triage,
+    expected_calibration_error,
     meets_auc_target,
     restricted_class_accuracy,
 )
@@ -79,6 +80,15 @@ def test_compute_classification_metrics():
     assert result["per_class_recall"] == {"a": 1.0, "b": 1.0, "c": 1.0}
     assert result["per_class_auc"] == {"a": 1.0, "b": 1.0, "c": 1.0}
     np.testing.assert_array_equal(result["predictions"], targets)
+
+
+def test_expected_calibration_error():
+    targets = np.array([0, 1, 0, 1])
+    perfect = np.array([[1.0, 0.0], [0.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
+    uncertain = np.full((4, 2), 0.5)
+
+    assert expected_calibration_error(perfect, targets) == pytest.approx(0.0)
+    assert expected_calibration_error(uncertain, targets) == pytest.approx(0.0)
 
 
 def test_restricted_class_accuracy_uses_restricted_argmax():

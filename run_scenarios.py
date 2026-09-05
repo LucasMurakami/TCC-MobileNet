@@ -233,7 +233,8 @@ def main():
                 epochs=None, patience=None, batch_size=None, lr_stage1=None, lr_stage2=None, seed=None,
                 img_size=None, mel_threshold=None, bcc_threshold=None, malignant_threshold=None,
                 balanced_sampling=False, logit_adjust=None, mixup_alpha=None, use_tta=False,
-                color_constancy=False, stage1_epochs=None, no_cudnn=args.no_cudnn
+                color_constancy=False, stage1_epochs=None, eval_precision=None,
+                selection_min_delta=None, no_cudnn=args.no_cudnn
             )
             resolved = resolve_run_config(cli_defaults, s_info, cfg)
             epochs, bs = resolved.epochs, resolved.batch_size
@@ -268,6 +269,9 @@ def main():
                 'seed': seed,
                 'mel_threshold': mel_threshold,
                 'bcc_threshold': bcc_threshold,
+                'malignant_threshold': resolved.malignant_threshold,
+                'eval_precision': resolved.eval_precision,
+                'selection_min_delta': resolved.selection_min_delta,
                 'balanced_sampling': balanced_sampling,
                 'logit_adjust': logit_adjust,
                 'mixup_alpha': mixup_alpha,
@@ -303,6 +307,8 @@ def main():
             ]
 
             cmd.extend(['--stage1-epochs', str(resolved.stage1_epochs)])
+            cmd.extend(['--eval-precision', resolved.eval_precision])
+            cmd.extend(['--selection-min-delta', str(resolved.selection_min_delta)])
             if resolved.img_size is not None:
                 cmd.extend(['--img-size', str(resolved.img_size)])
             if resolved.malignant_threshold is not None:
@@ -407,21 +413,21 @@ def main():
                         'accuracy': round(pad_acc, 4),
                         'pad_accuracy': round(pad_acc, 4),
                         'weighted_avg_f1': round(pad_w_f1, 4),
-                        'macro_avg_f1': round(res_data.get('macro_avg_f1', 0.0), 4),
-                        'mel_recall': round(res_data.get('mel_recall', 0.0), 4),
+                        'macro_avg_f1': round(res_data.get('pad_macro_f1', 0.0), 4),
+                        'mel_recall': round(res_data.get('pad_mel_recall', 0.0), 4),
                         'mel_auc_roc': round(pad_mel_auc, 4),
                         'pad_mel_auc_roc': round(pad_mel_auc, 4),
-                        'macro_auc_roc': round(res_data.get('macro_auc_roc', 0.0), 4),
+                        'macro_auc_roc': round(res_data.get('pad_macro_auc_roc', 0.0), 4),
                         'pad_macro_auc_roc': round(res_data.get('pad_macro_auc_roc', 0.0), 4),
-                        'harmonized_5class_acc': round(res_data.get('pad_harmonized_5class_acc', res_data.get('harmonized_5class_acc', pad_acc)), 4),
-                        'bcc_recall': round(res_data.get('bcc_recall', 0.0), 4),
+                        'harmonized_5class_acc': round(res_data.get('pad_harmonized_5class_acc', pad_acc), 4),
+                        'restricted_5class_acc': round(res_data.get('pad_restricted_5class_acc', 0.0), 4),
+                        'bcc_recall': round(res_data.get('pad_bcc_recall', 0.0), 4),
 
                         # Domain Gap
                         'domain_gap': round(gap, 4),
 
                         # Stage 1 Benchmarks
-                        'stage1_ham_acc': round(res_data.get('stage1_ham_accuracy', 0.0), 4),
-                        'stage1_pad_acc': round(res_data.get('stage1_pad_accuracy', 0.0), 4),
+                        'stage1_ham_acc': round(res_data.get('stage1_ham_val_accuracy', 0.0), 4),
 
                         'duration_min': round(duration / 60, 2),
                         'completed_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),

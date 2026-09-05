@@ -63,21 +63,10 @@ def predict_loader(model, loader, device, precision_dtype, has_cuda, use_tta=Fal
     with torch.no_grad():
         for x, _ in loader:
             x = x.to(device, non_blocking=True)
-            if use_tta:
-                x_h = torch.flip(x, dims=[-1])
-                x_v = torch.flip(x, dims=[-2])
-                x_r = torch.rot90(x, 1, [-2, -1])
-                with nullcontext():
-                    o1 = model(x)
-                    o2 = model(x_h)
-                    o3 = model(x_v)
-                    o4 = model(x_r)
-                    out = (o1 + o2 + o3 + o4) / 4.0
-            else:
-                with nullcontext():
-                    out = model(x)
-
-            probs = torch.softmax(out.float(), dim=1)
+            views = [x, torch.flip(x, dims=[-1]), torch.flip(x, dims=[-2])] if use_tta else [x]
+            with nullcontext():
+                outputs = [model(view) for view in views]
+            probs = torch.stack([torch.softmax(output.float(), dim=1) for output in outputs]).mean(dim=0)
             all_probs.extend(probs.cpu().numpy())
     return np.array(all_probs)
 
@@ -90,9 +79,9 @@ def evaluate_ensemble(
     precision_dtype,
     has_cuda: bool,
     weights: dict = None,
-    mel_threshold='youden',
-    bcc_threshold='youden',
-    malignant_threshold=None,
+    mel_threshold='sens90',
+    bcc_threshold='sens90',
+    malignant_threshold='sens90',
     use_tta=False
 ) -> dict:
     """Computes weighted probability ensemble and comprehensive clinical metrics."""
@@ -145,7 +134,7 @@ def evaluate_ensemble(
     mal_indices = [CLASS_NAMES.index(c) for c in ['mel', 'bcc', 'akiec']]
     bin_mal = np.isin(targets, mal_indices).astype(int)
     mal_probs = np.sum(ensemble_probs[:, mal_indices], axis=1)
-    mal_res = _evaluate_binary_triage(mal_probs, bin_mal, threshold_spec=malignant_threshold or 'youden', default_th=0.20)
+    mal_res = _evaluate_binary_triage(mal_probs, bin_mal, threshold_spec=malignant_threshold or 'sens90', default_th=0.20)
 
     return {
         'accuracy': acc,
@@ -180,7 +169,7 @@ def parse_args():
     parser.add_argument('--session-dir', type=str, required=True, help='Path to session directory with trained models')
     parser.add_argument('--models', nargs='+', default=['v2', 'v4', 'v5'], help='List of model names to ensemble')
     parser.add_argument('--weights', nargs='+', type=float, default=None, help='Weights for each model (must match length of --models)')
-    parser.add_argument('--use-tta', action='store_true', default=False, help='Apply 4-view Test-Time Augmentation')
+    parser.add_argument('--use-tta', action='store_true', default=False, help='Apply 3-view probability-averaged Test-Time Augmentation')
     parser.add_argument('--color-constancy', action='store_true', default=False, help='Apply Shades-of-Gray transform')
     parser.add_argument('--batch-size', type=int, default=32, help='Inference batch size')
     parser.add_argument('--output-dir', type=str, default=None, help='Output directory for ensemble artifacts')
