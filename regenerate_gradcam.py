@@ -14,7 +14,7 @@ import timm
 # Setup path to import workspace modules
 sys.path.append(str(Path(__file__).parent))
 from dataset import CLASS_NAMES, NUM_CLASSES, prepare_dataset, ensure_pad_ufes20_download, load_pad_ufes20_validation
-from train_timm_models import MODEL_CONFIGS, build_transforms
+from train_timm_models import MODEL_CONFIGS, build_transforms, configure_hardware_environment
 from visualize import generate_gradcam_gallery
 
 
@@ -26,6 +26,7 @@ def parse_args():
                         help='Filter by specific model variant (e.g. v3, v4, v5). If omitted, processes all models.')
     parser.add_argument('--scenario', type=str, default=None,
                         help='Filter by specific scenario name (e.g. maximum, medium, low). If omitted, processes all.')
+    parser.add_argument('--no-cudnn', action='store_true', default=False, help='Disable cuDNN compatibility path')
     return parser.parse_args()
 
 
@@ -72,8 +73,9 @@ def load_validation_dataframes(target_dir: Path):
 
 def main():
     args = parse_args()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    hw = configure_hardware_environment(disable_cudnn=args.no_cudnn)
+    device = hw['device']
+    print(f"Using device: {hw['device_name']} | cuDNN: {'enabled' if hw['cudnn_enabled'] else 'disabled'}")
 
     # Determine target directories
     if args.session_dir:

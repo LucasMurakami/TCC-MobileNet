@@ -9,6 +9,7 @@ Includes:
 """
 
 import os
+import traceback
 from pathlib import Path
 from typing import List, Optional, Union, Dict, Any
 import numpy as np
@@ -588,14 +589,20 @@ def generate_gradcam_gallery(
                 if use_occlusion:
                     # 3. Occlusion Sensitivity (gradient-free, model-agnostic evidence map)
                     occ_target = true_label_idx if target_mode == "true" else pred_label_idx
-                    occ_map, _ = occ_gen(img_tensor, target_class=occ_target)
-                    agreement = attribution_agreement(heatmap, occ_map)
-                    axes[row_idx, 2].imshow(overlay_gradcam(img_np, occ_map, alpha=0.45, colormap='jet'))
-                    axes[row_idx, 2].set_title(
-                        f"Occlusion Sensitivity: ΔP({class_names[occ_target].upper()})\n"
-                        f"vs Grad-CAM: r={agreement['pearson']:.2f}, top-20% IoU={agreement['top_iou']:.2f}",
-                        fontsize=9, fontweight='bold'
-                    )
+                    try:
+                        occ_map, _ = occ_gen(img_tensor, target_class=occ_target)
+                        agreement = attribution_agreement(heatmap, occ_map)
+                        axes[row_idx, 2].imshow(overlay_gradcam(img_np, occ_map, alpha=0.45, colormap='jet'))
+                        axes[row_idx, 2].set_title(
+                            f"Occlusion Sensitivity: ΔP({class_names[occ_target].upper()})\n"
+                            f"vs Grad-CAM: r={agreement['pearson']:.2f}, top-20% IoU={agreement['top_iou']:.2f}",
+                            fontsize=9, fontweight='bold'
+                        )
+                    except Exception as occ_err:
+                        print(f"Warning: occlusion sensitivity failed for {img_path}: {occ_err!r}")
+                        traceback.print_exc()
+                        axes[row_idx, 2].imshow(img_np)
+                        axes[row_idx, 2].set_title("Occlusion Sensitivity\n(failed — see log)", fontsize=9, fontweight='bold', color='#d62728')
                     axes[row_idx, 2].axis('off')
                     overlay_col = 3
 
@@ -608,7 +615,11 @@ def generate_gradcam_gallery(
                 axes[row_idx, overlay_col].axis('off')
 
         except Exception as e:
-            print(f"Warning: Could not process Grad-CAM for {img_path}: {e}")
+            print(f"Warning: Could not process Grad-CAM for {img_path}: {e!r}")
+            traceback.print_exc()
+            axes[row_idx, 0].set_title(f"{Path(img_path).name} ({true_class.upper()})\nFAILED: {type(e).__name__}", fontsize=9, fontweight='bold', color='#d62728')
+            for col in range(num_cols):
+                axes[row_idx, col].axis('off')
 
     cam_gen.remove_hooks()
     plt.tight_layout()

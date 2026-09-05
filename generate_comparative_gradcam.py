@@ -9,11 +9,12 @@ from PIL import Image
 import matplotlib.pyplot as plt
 from torchvision import transforms
 
-from train_timm_models import build_transforms
+from train_timm_models import build_transforms, configure_hardware_environment
 from visualize import PyTorchGradCAM, overlay_gradcam, generate_gradcam_gallery
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Device: {device}", flush=True)
+_hw = configure_hardware_environment()
+device = _hw['device']
+print(f"Device: {_hw['device_name']} | cuDNN: {'enabled' if _hw['cudnn_enabled'] else 'disabled'}", flush=True)
 
 CLASS_NAMES = ['akiec', 'bcc', 'bkl', 'df', 'mel', 'nv', 'vasc']
 NUM_CLASSES = 7
