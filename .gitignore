@@ -63,6 +63,7 @@ mobilenetv5_test_run/
 # Experiments Folder: ignore all sessions except 04_09
 /experiments/*
 !/experiments/04_09_2026*
+!/experiments/05_09_2026*
 !/experiments/GLOBAL_ARCHIVE_INDEX.md
 
 # Ignore all pth files - AI models

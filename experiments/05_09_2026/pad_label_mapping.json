@@ -1,0 +1,46 @@
+{
+  "labels": [
+    {
+      "dropped": 0,
+      "kept": 730,
+      "mapped_to": "akiec",
+      "raw_label": "ack",
+      "total": 730
+    },
+    {
+      "dropped": 0,
+      "kept": 845,
+      "mapped_to": "bcc",
+      "raw_label": "bcc",
+      "total": 845
+    },
+    {
+      "dropped": 0,
+      "kept": 52,
+      "mapped_to": "mel",
+      "raw_label": "mel",
+      "total": 52
+    },
+    {
+      "dropped": 0,
+      "kept": 244,
+      "mapped_to": "nv",
+      "raw_label": "nev",
+      "total": 244
+    },
+    {
+      "dropped": 0,
+      "kept": 192,
+      "mapped_to": "akiec",
+      "raw_label": "scc",
+      "total": 192
+    },
+    {
+      "dropped": 0,
+      "kept": 235,
+      "mapped_to": "bkl",
+      "raw_label": "sek",
+      "total": 235
+    }
+  ]
+}

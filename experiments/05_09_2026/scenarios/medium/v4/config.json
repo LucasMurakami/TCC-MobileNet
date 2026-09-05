@@ -1,0 +1,46 @@
+{
+  "config": {
+    "epochs": 30,
+    "patience": 6,
+    "batch_size": 32,
+    "lr_stage1": 0.001,
+    "lr_stage2": 2e-05,
+    "seed": 42,
+    "img_size": null,
+    "mel_threshold": "sens90",
+    "bcc_threshold": "sens90",
+    "malignant_threshold": "sens90",
+    "balanced_sampling": true,
+    "logit_adjust": 0.0,
+    "mixup_alpha": 0.2,
+    "use_tta": true,
+    "color_constancy": false,
+    "stage1_epochs": 3,
+    "eval_precision": "amp",
+    "selection_min_delta": 0.0005,
+    "no_cudnn": false
+  },
+  "hardware": {
+    "device": "cuda",
+    "device_name": "NVIDIA GeForce RTX 5070",
+    "vram_gb": 11.94000244140625,
+    "device_count": 1,
+    "has_bf16": true,
+    "precision_dtype": "torch.bfloat16",
+    "precision_name": "BFloat16 (BF16)",
+    "cudnn_enabled": false
+  },
+  "split_manifest_sha256": "91c47ecbe509fb3386c25d27d5685ad62fe08711b8fc90b50d3435f3d605f097",
+  "packages": {
+    "torch": "2.13.0",
+    "torchvision": "0.28.0",
+    "timm": "1.0.28",
+    "numpy": "2.5.1",
+    "pandas": "3.0.5",
+    "scikit-learn": "1.9.0"
+  },
+  "python": "3.12.3 (main, Jun 19 2026, 12:46:00) [GCC 13.3.0]",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "git_sha": "0373857be7d25fbf00d5f184d52fbf51e71138ec",
+  "git_dirty": true
+}
