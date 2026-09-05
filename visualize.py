@@ -224,15 +224,12 @@ def find_gradcam_target_layer(model: nn.Module) -> Optional[nn.Module]:
         'se.', '.se.', 'conv_reduce', 'conv_expand', 'se_module', 'squeeze', 'excitation'
     )
 
-    # 0. MobileNetV5 / Gemma3n: target the final pre-normalization spatial convolution
+    # 0. MobileNetV5 / Gemma3n: target the output of the last spatial stage (blocks[-1], 8x8 @ 256px).
+    # The MSFA that follows nearest-upsamples this map and concatenates it with the 16x16 stage-3 map,
+    # so any layer inside the MSFA (including pw_proj) carries 2x2-duplicated cells that render as a grid.
     if hasattr(raw_model, 'msfa'):
-        if hasattr(raw_model.msfa, 'ffn') and hasattr(raw_model.msfa.ffn, 'pw_proj'):
-            return raw_model.msfa.ffn.pw_proj.conv
-        if hasattr(raw_model, 'blocks') and len(raw_model.blocks) >= 4:
-            stage = raw_model.blocks[3]
-            candidates = [module for module in stage.modules() if isinstance(module, nn.Conv2d)]
-            if candidates:
-                return candidates[-1]
+        if hasattr(raw_model, 'blocks') and len(raw_model.blocks) > 0:
+            return raw_model.blocks[-1]
         return raw_model.msfa
 
     # 1. Primary priority: The last convolutional layer in blocks[-1] (the final spatial feature extraction stage)
@@ -373,6 +370,82 @@ class PyTorchGradCAM:
             self.hook_handle = None
 
 
+class OcclusionSensitivity:
+    """
+    Gradient-free, architecture-agnostic attribution: slides a mean-valued patch over the input and records
+    the drop in the target-class probability. The map answers "which regions does the model actually rely on"
+    without depending on any internal layer, so it is valid for attention/MSFA stages where Grad-CAM is unreliable.
+    """
+    def __init__(self, model: nn.Module, patch_frac: float = 0.125, stride_frac: float = 0.0625, batch_size: int = 32):
+        self.model = model
+        self.patch_frac = patch_frac
+        self.stride_frac = stride_frac
+        self.batch_size = batch_size
+
+    @torch.no_grad()
+    def __call__(self, x: torch.Tensor, target_class: Optional[int] = None) -> tuple:
+        self.model.eval()
+        _, _, H, W = x.shape
+        patch = max(4, int(round(min(H, W) * self.patch_frac)))
+        stride = max(1, int(round(min(H, W) * self.stride_frac)))
+
+        base_probs = self.model(x).softmax(dim=1)[0]
+        if target_class is None:
+            target_class = int(base_probs.argmax().item())
+        base_p = float(base_probs[target_class])
+
+        ys = list(range(0, max(H - patch, 0) + 1, stride))
+        xs = list(range(0, max(W - patch, 0) + 1, stride))
+        if ys[-1] != H - patch:
+            ys.append(H - patch)
+        if xs[-1] != W - patch:
+            xs.append(W - patch)
+        positions = [(y0, x0) for y0 in ys for x0 in xs]
+
+        drops = []
+        for start in range(0, len(positions), self.batch_size):
+            chunk = positions[start:start + self.batch_size]
+            batch = x.repeat(len(chunk), 1, 1, 1)
+            for i, (y0, x0) in enumerate(chunk):
+                batch[i, :, y0:y0 + patch, x0:x0 + patch] = 0.0
+            probs = self.model(batch).softmax(dim=1)[:, target_class]
+            drops.append((base_p - probs).clamp_min(0.0).float().cpu())
+        drops = torch.cat(drops)
+
+        heat = torch.zeros((H, W), dtype=torch.float32)
+        count = torch.zeros((H, W), dtype=torch.float32)
+        for (y0, x0), d in zip(positions, drops):
+            heat[y0:y0 + patch, x0:x0 + patch] += d
+            count[y0:y0 + patch, x0:x0 + patch] += 1.0
+        heat = (heat / count.clamp_min(1.0)).numpy()
+
+        if gaussian_filter is not None:
+            heat = gaussian_filter(heat, sigma=patch / 4.0)
+        h_min, h_max = float(heat.min()), float(heat.max())
+        if h_max - h_min > 1e-7:
+            heat = (heat - h_min) / (h_max - h_min)
+        else:
+            heat = np.zeros_like(heat)
+
+        return heat.astype(np.float32), base_probs.detach().cpu().numpy()
+
+
+def attribution_agreement(map_a: np.ndarray, map_b: np.ndarray, top_frac: float = 0.2) -> Dict[str, float]:
+    """Pearson correlation and top-region IoU between two normalized attribution maps of equal shape."""
+    a = map_a.astype(np.float64).ravel()
+    b = map_b.astype(np.float64).ravel()
+    if a.std() < 1e-9 or b.std() < 1e-9:
+        pearson = 0.0
+    else:
+        pearson = float(np.corrcoef(a, b)[0, 1])
+    q = 1.0 - top_frac
+    top_a = (a >= np.quantile(a, q)) & (a > 0)
+    top_b = (b >= np.quantile(b, q)) & (b > 0)
+    union = np.logical_or(top_a, top_b).sum()
+    iou = float(np.logical_and(top_a, top_b).sum() / union) if union > 0 else 0.0
+    return {'pearson': pearson, 'top_iou': iou}
+
+
 def overlay_gradcam(original_img: np.ndarray, heatmap: np.ndarray, alpha: float = 0.45, colormap: str = 'jet') -> np.ndarray:
     """Superimpose Grad-CAM heatmap onto RGB image [0, 255]."""
     cmap = matplotlib.colormaps[colormap]
@@ -402,6 +475,7 @@ def generate_gradcam_gallery(
     device: Optional[torch.device] = None,
     target_mode: str = "pred",
     transform=None,
+    occlusion: bool = True,
 ) -> Optional[plt.Figure]:
     """
     Generates a CNN/ViT interpretability Grad-CAM gallery containing at least ONE representative
@@ -410,6 +484,8 @@ def generate_gradcam_gallery(
     Args:
         target_mode: 'pred' (attention on predicted class), 'true' (attention on ground truth class),
                      or 'contrastive' (4 columns: Input | Pred CAM | True Class CAM | Overlay).
+        occlusion: in 'pred'/'true' mode, add a gradient-free occlusion-sensitivity column and report its
+                   agreement with Grad-CAM (Input | Grad-CAM | Occlusion | Overlay).
     """
     raw_model = model.module if hasattr(model, 'module') else model
     if device is None:
@@ -421,6 +497,9 @@ def generate_gradcam_gallery(
         raw_model = raw_model.to(device)
 
     cam_gen = PyTorchGradCAM(raw_model)
+    is_contrastive = (target_mode == "contrastive")
+    use_occlusion = occlusion and not is_contrastive
+    occ_gen = OcclusionSensitivity(raw_model) if use_occlusion else None
 
     # Find at least 1 sample per class
     samples = []
@@ -434,9 +513,8 @@ def generate_gradcam_gallery(
         return None
 
     num_samples = len(samples)
-    is_contrastive = (target_mode == "contrastive")
-    num_cols = 4 if is_contrastive else 3
-    fig_width = 16 if is_contrastive else 13
+    num_cols = 4 if (is_contrastive or use_occlusion) else 3
+    fig_width = 16 if num_cols == 4 else 13
 
     fig, axes = plt.subplots(num_samples, num_cols, figsize=(fig_width, 3.8 * num_samples))
     fig.patch.set_facecolor('#fafafa')
@@ -506,13 +584,28 @@ def generate_gradcam_gallery(
                 axes[row_idx, 1].set_title(title_cam, fontsize=10, fontweight='bold')
                 axes[row_idx, 1].axis('off')
 
-                # 3. Superimposed Overlay
-                axes[row_idx, 2].imshow(superimposed)
-                axes[row_idx, 2].set_title(
+                overlay_col = 2
+                if use_occlusion:
+                    # 3. Occlusion Sensitivity (gradient-free, model-agnostic evidence map)
+                    occ_target = true_label_idx if target_mode == "true" else pred_label_idx
+                    occ_map, _ = occ_gen(img_tensor, target_class=occ_target)
+                    agreement = attribution_agreement(heatmap, occ_map)
+                    axes[row_idx, 2].imshow(overlay_gradcam(img_np, occ_map, alpha=0.45, colormap='jet'))
+                    axes[row_idx, 2].set_title(
+                        f"Occlusion Sensitivity: ΔP({class_names[occ_target].upper()})\n"
+                        f"vs Grad-CAM: r={agreement['pearson']:.2f}, top-20% IoU={agreement['top_iou']:.2f}",
+                        fontsize=9, fontweight='bold'
+                    )
+                    axes[row_idx, 2].axis('off')
+                    overlay_col = 3
+
+                # 4. Superimposed Overlay
+                axes[row_idx, overlay_col].imshow(superimposed)
+                axes[row_idx, overlay_col].set_title(
                     f"Pred: {pred_class.upper()} ({confidence:.1%})\nResult: {'CORRECT' if is_correct else 'INCORRECT'}",
                     fontsize=10, fontweight='bold', color=status_color
                 )
-                axes[row_idx, 2].axis('off')
+                axes[row_idx, overlay_col].axis('off')
 
         except Exception as e:
             print(f"Warning: Could not process Grad-CAM for {img_path}: {e}")
