@@ -1,0 +1,340 @@
+{
+  "model": "v5",
+  "pretrained": "Google Gemma3n Vision (Hugging Face / timm)",
+  "img_size": 256,
+  "batch_size": 32,
+  "batch_strategy": {
+    "micro_batch": 8,
+    "grad_accum_steps": 4,
+    "tier_gb": 12
+  },
+  "params": 294141255,
+  "trainable_params": 290207623,
+  "preprocessing": {
+    "input_size": 256,
+    "mean": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "std": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "interpolation": "bicubic"
+  },
+  "eval_precision": "fp32",
+  "selection_metric": "ham_val_mel_auc_roc",
+  "selection_score": 0.9023547712278067,
+  "selected_epoch": 17,
+  "mel_triage_threshold": 0.3374,
+  "bcc_triage_threshold": 0.0817,
+  "malignant_triage_threshold": 0.25,
+  "balanced_sampling": true,
+  "logit_adjust": 0.0,
+  "mixup_alpha": 0.2,
+  "color_constancy": false,
+  "use_tta": true,
+  "stage1_ham_val_accuracy": 0.5317460317460317,
+  "ham_val_accuracy": 0.7757936507936508,
+  "ham_val_mel_auc_roc": 0.8992222281821596,
+  "ham_val_mel_auc_ci_low": 0.858993199557989,
+  "ham_val_mel_auc_ci_high": 0.9355729577421709,
+  "ham_val_macro_auc_roc": 0.959258146204775,
+  "ham_val_macro_auc_ci_low": 0.9451595161484676,
+  "ham_val_macro_auc_ci_high": 0.9712977524112005,
+  "ham_accuracy": 0.7764411027568923,
+  "ham_weighted_f1": 0.781878337689407,
+  "ham_macro_f1": 0.6557453285345092,
+  "ham_mel_recall": 0.7568807339449541,
+  "ham_bcc_recall": 0.62,
+  "ham_akiec_recall": 0.46774193548387094,
+  "ham_mel_auc_roc": 0.8927245692926435,
+  "ham_macro_auc_roc": 0.9505831855590078,
+  "ham_test_accuracy": 0.7764411027568923,
+  "ham_test_mel_auc_roc": 0.8927245692926435,
+  "ham_test_mel_auc_ci_low": 0.8641847097238928,
+  "ham_test_mel_auc_ci_high": 0.9175391765132687,
+  "ham_test_bcc_auc_roc": 0.9796,
+  "ham_test_bcc_auc_ci_low": 0.9714576092855538,
+  "ham_test_bcc_auc_ci_high": 0.9877537261355697,
+  "ham_test_macro_auc_ci_low": 0.9420784099819766,
+  "ham_test_macro_auc_ci_high": 0.9587841050182458,
+  "ham_harmonized_5class_acc": 0.7767441860465116,
+  "ham_test_macro_auc_5class": 0.9337,
+  "ham_mel_triage_recall": 0.8257,
+  "ham_mel_triage_spec": 0.7738,
+  "ham_mel_triage_recall_ci_low": 0.7584773464727798,
+  "ham_mel_triage_recall_ci_high": 0.8846198156682027,
+  "ham_mel_operating_points": {
+    "tau_0.50": {
+      "threshold": 0.5,
+      "sensitivity": 0.5872,
+      "specificity": 0.9207,
+      "detected": "128/218"
+    },
+    "tau_0.30": {
+      "threshold": 0.3,
+      "sensitivity": 0.867,
+      "specificity": 0.7372,
+      "detected": "189/218"
+    },
+    "tau_0.20": {
+      "threshold": 0.2,
+      "sensitivity": 0.9404,
+      "specificity": 0.6066,
+      "detected": "205/218"
+    },
+    "tau_0.15": {
+      "threshold": 0.15,
+      "sensitivity": 0.9817,
+      "specificity": 0.5087,
+      "detected": "214/218"
+    },
+    "tau_0.10": {
+      "threshold": 0.1,
+      "sensitivity": 0.9954,
+      "specificity": 0.3557,
+      "detected": "217/218"
+    },
+    "tau_0.05": {
+      "threshold": 0.05,
+      "sensitivity": 0.9954,
+      "specificity": 0.1593,
+      "detected": "217/218"
+    },
+    "tau_0.02": {
+      "threshold": 0.02,
+      "sensitivity": 1.0,
+      "specificity": 0.0422,
+      "detected": "218/218"
+    }
+  },
+  "ham_bcc_triage_recall": 0.94,
+  "ham_bcc_triage_spec": 0.9224,
+  "ham_bcc_triage_recall_ci_low": 0.8817910758965805,
+  "ham_bcc_triage_recall_ci_high": 0.9886363636363636,
+  "ham_bcc_operating_points": {
+    "tau_0.50": {
+      "threshold": 0.5,
+      "sensitivity": 0.42,
+      "specificity": 0.9921,
+      "detected": "42/100"
+    },
+    "tau_0.30": {
+      "threshold": 0.3,
+      "sensitivity": 0.68,
+      "specificity": 0.981,
+      "detected": "68/100"
+    },
+    "tau_0.20": {
+      "threshold": 0.2,
+      "sensitivity": 0.77,
+      "specificity": 0.9678,
+      "detected": "77/100"
+    },
+    "tau_0.15": {
+      "threshold": 0.15,
+      "sensitivity": 0.83,
+      "specificity": 0.9562,
+      "detected": "83/100"
+    },
+    "tau_0.10": {
+      "threshold": 0.1,
+      "sensitivity": 0.91,
+      "specificity": 0.9377,
+      "detected": "91/100"
+    },
+    "tau_0.05": {
+      "threshold": 0.05,
+      "sensitivity": 0.99,
+      "specificity": 0.8929,
+      "detected": "99/100"
+    },
+    "tau_0.02": {
+      "threshold": 0.02,
+      "sensitivity": 1.0,
+      "specificity": 0.7794,
+      "detected": "100/100"
+    }
+  },
+  "ham_malignant_triage_recall": 0.9579,
+  "ham_malignant_triage_spec": 0.5926,
+  "pad_accuracy": 0.23411662315056572,
+  "pad_weighted_f1": 0.2083334416015586,
+  "pad_macro_f1": 0.15800488605712484,
+  "pad_mel_recall": 0.36538461538461536,
+  "pad_bcc_recall": 0.28402366863905326,
+  "pad_akiec_recall": 0.016268980477223426,
+  "pad_mel_auc_roc": 0.8467360778135489,
+  "pad_mel_auc_ci_low": 0.770981451218475,
+  "pad_mel_auc_ci_high": 0.9098289542928064,
+  "pad_bcc_auc_roc": 0.7304,
+  "pad_bcc_auc_ci_low": 0.7065189385571907,
+  "pad_bcc_auc_ci_high": 0.7540284090407675,
+  "pad_macro_auc_ci_low": 0.7141734561208034,
+  "pad_macro_auc_ci_high": 0.7519070087821327,
+  "pad_macro_auc_roc": 0.733129782252986,
+  "pad_harmonized_5class_acc": 0.23411662315056572,
+  "pad_restricted_5class_acc": 0.24673629242819844,
+  "pad_oracle_mel_triage_threshold": 0.2103,
+  "pad_oracle_mel_triage_recall": 0.6923,
+  "pad_oracle_mel_triage_spec": 0.8847,
+  "pad_mel_triage_recall": 0.4808,
+  "pad_mel_triage_spec": 0.9581,
+  "pad_mel_triage_recall_ci_low": 0.3331896551724138,
+  "pad_mel_triage_recall_ci_high": 0.641590119165839,
+  "pad_mel_triage_detected": "25/52",
+  "pad_mel_operating_points": {
+    "tau_0.50": {
+      "threshold": 0.5,
+      "sensitivity": 0.2308,
+      "specificity": 0.9875,
+      "detected": "12/52"
+    },
+    "tau_0.30": {
+      "threshold": 0.3,
+      "sensitivity": 0.5,
+      "specificity": 0.9426,
+      "detected": "26/52"
+    },
+    "tau_0.20": {
+      "threshold": 0.2,
+      "sensitivity": 0.6923,
+      "specificity": 0.8731,
+      "detected": "36/52"
+    },
+    "tau_0.15": {
+      "threshold": 0.15,
+      "sensitivity": 0.7692,
+      "specificity": 0.7881,
+      "detected": "40/52"
+    },
+    "tau_0.10": {
+      "threshold": 0.1,
+      "sensitivity": 0.8462,
+      "specificity": 0.6625,
+      "detected": "44/52"
+    },
+    "tau_0.05": {
+      "threshold": 0.05,
+      "sensitivity": 0.9038,
+      "specificity": 0.4207,
+      "detected": "47/52"
+    },
+    "tau_0.02": {
+      "threshold": 0.02,
+      "sensitivity": 1.0,
+      "specificity": 0.1371,
+      "detected": "52/52"
+    }
+  },
+  "pad_bcc_triage_recall": 0.6331,
+  "pad_bcc_triage_spec": 0.6765,
+  "pad_bcc_triage_recall_ci_low": 0.597883031876291,
+  "pad_bcc_triage_recall_ci_high": 0.6681779981120527,
+  "pad_bcc_triage_detected": "535/845",
+  "pad_bcc_operating_points": {
+    "tau_0.50": {
+      "threshold": 0.5,
+      "sensitivity": 0.1432,
+      "specificity": 0.956,
+      "detected": "121/845"
+    },
+    "tau_0.30": {
+      "threshold": 0.3,
+      "sensitivity": 0.3172,
+      "specificity": 0.8906,
+      "detected": "268/845"
+    },
+    "tau_0.20": {
+      "threshold": 0.2,
+      "sensitivity": 0.4189,
+      "specificity": 0.819,
+      "detected": "354/845"
+    },
+    "tau_0.15": {
+      "threshold": 0.15,
+      "sensitivity": 0.4899,
+      "specificity": 0.777,
+      "detected": "414/845"
+    },
+    "tau_0.10": {
+      "threshold": 0.1,
+      "sensitivity": 0.5917,
+      "specificity": 0.7144,
+      "detected": "500/845"
+    },
+    "tau_0.05": {
+      "threshold": 0.05,
+      "sensitivity": 0.7385,
+      "specificity": 0.5926,
+      "detected": "624/845"
+    },
+    "tau_0.02": {
+      "threshold": 0.02,
+      "sensitivity": 0.8746,
+      "specificity": 0.4728,
+      "detected": "739/845"
+    }
+  },
+  "pad_malignant_triage_recall": 0.541,
+  "pad_malignant_triage_spec": 0.8351,
+  "pad_malignant_triage_detected": "984/1819",
+  "pad_malignant_operating_points": {
+    "tau_0.50": {
+      "threshold": 0.5,
+      "sensitivity": 0.2479,
+      "specificity": 0.9749,
+      "detected": "451/1819"
+    },
+    "tau_0.30": {
+      "threshold": 0.3,
+      "sensitivity": 0.4656,
+      "specificity": 0.8873,
+      "detected": "847/1819"
+    },
+    "tau_0.20": {
+      "threshold": 0.2,
+      "sensitivity": 0.6234,
+      "specificity": 0.7766,
+      "detected": "1134/1819"
+    },
+    "tau_0.15": {
+      "threshold": 0.15,
+      "sensitivity": 0.7257,
+      "specificity": 0.6555,
+      "detected": "1320/1819"
+    },
+    "tau_0.10": {
+      "threshold": 0.1,
+      "sensitivity": 0.8378,
+      "specificity": 0.524,
+      "detected": "1524/1819"
+    },
+    "tau_0.05": {
+      "threshold": 0.05,
+      "sensitivity": 0.9456,
+      "specificity": 0.2651,
+      "detected": "1720/1819"
+    },
+    "tau_0.02": {
+      "threshold": 0.02,
+      "sensitivity": 0.9929,
+      "specificity": 0.0522,
+      "detected": "1806/1819"
+    }
+  },
+  "domain_gap": 0.5423244796063266,
+  "domain_gap_drop": 0.5423244796063266,
+  "mel_auc_gap": 0.04598849147909467,
+  "macro_auc_gap": 0.200570217747014,
+  "mel_sens_gap": 0.3449,
+  "mel_threshold_source": "youden",
+  "bcc_threshold_source": "youden",
+  "meets_auc_target_ham": true,
+  "meets_auc_target_pad": false,
+  "peak_vram_allocated_gb": 9.065851211547852,
+  "peak_vram_reserved_gb": 10.556640625
+}
