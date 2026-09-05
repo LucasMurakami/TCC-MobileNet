@@ -106,15 +106,15 @@ def compute_adaptive_batch_strategy(vram_gb: float, model_name: str, requested_b
     is_large_model = model_name in ('v5', 'v4convl')
 
     if vram_gb >= 23.5:
-        tier_gb, micro_batch = 24, requested_batch
+        tier_gb, micro_batch = 24, 16 if is_large_model else requested_batch
     elif vram_gb >= 11.5:
-        tier_gb, micro_batch = 12, 16 if is_large_model else min(requested_batch, 32)
+        tier_gb, micro_batch = 12, 8 if is_large_model else min(requested_batch, 32)
     elif vram_gb >= 7.5:
-        tier_gb, micro_batch = 8, 8 if is_large_model else min(requested_batch, 16)
+        tier_gb, micro_batch = 8, 4 if is_large_model else min(requested_batch, 16)
     elif vram_gb >= 3.5:
-        tier_gb, micro_batch = 4, 4 if is_large_model else min(requested_batch, 8)
+        tier_gb, micro_batch = 4, 2 if is_large_model else min(requested_batch, 8)
     else:
-        tier_gb, micro_batch = 0, 2 if is_large_model else min(requested_batch, 4)
+        tier_gb, micro_batch = 0, 1 if is_large_model else min(requested_batch, 4)
 
     grad_accum_steps = max(1, int(np.ceil(requested_batch / micro_batch)))
     return {'micro_batch': micro_batch, 'grad_accum_steps': grad_accum_steps, 'tier_gb': tier_gb}
@@ -626,6 +626,14 @@ def train_single_model(
     model = model.to(device)
     raw_model = model.module if isinstance(model, nn.DataParallel) else model
 
+    is_large_model = model_name in ('v5', 'v4convl')
+    if hasattr(raw_model, 'set_grad_checkpointing') and is_large_model:
+        try:
+            raw_model.set_grad_checkpointing(enable=True)
+            print("  ⚡ Gradient Checkpointing: ENABLED (activation memory reduced by ~60%)")
+        except Exception as e:
+            print(f"  ⚠️ Could not enable gradient checkpointing: {e}")
+
     use_color_constancy = getattr(args, 'color_constancy', False)
     use_tta = getattr(args, 'use_tta', False)
 
@@ -804,6 +812,9 @@ def train_single_model(
         logit_adjust=logit_adjust, class_priors=train_class_priors
     )
     print(f"\n[Stage 1 Complete] HAM validation Acc: {s1_ham_eval['accuracy']:.2%}\n")
+    del optimizer1
+    if has_cuda:
+        torch.cuda.empty_cache()
 
     # ──────────────────────────────────────────────────────────────────────────
     # Stage 2: End-to-End Fine-Tuning

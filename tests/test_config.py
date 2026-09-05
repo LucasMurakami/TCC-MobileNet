@@ -42,8 +42,9 @@ def test_config_precedence():
 
 def test_rtx_5070_uses_12gb_tier():
     assert compute_adaptive_batch_strategy(11.9, 'v5') == {
-        'micro_batch': 16, 'grad_accum_steps': 2, 'tier_gb': 12
+        'micro_batch': 8, 'grad_accum_steps': 4, 'tier_gb': 12
     }
     assert compute_adaptive_batch_strategy(11.9, 'v1') == {
         'micro_batch': 32, 'grad_accum_steps': 1, 'tier_gb': 12
     }
+
