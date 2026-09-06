@@ -1,6 +1,6 @@
 # 🗂️ Global Experiments Archive Index
 
-*Last Updated: 2026-09-06 03:35:22*
+*Last Updated: 2026-09-06 15:19:55*
 
 | Session Date / Folder | Runs Completed | Top HAM Test Mel AUC | Top PAD Mel AUC | Link |
 |:---|:---:|:---:|:---:|:---|
@@ -13,7 +13,7 @@
 | **`18_08_2026_run2`** | 17 | N/A | N/A | [`SUMMARY.md`](18_08_2026_run2/SUMMARY.md) |
 | **`18_08_2026`** | 19 | N/A | N/A | [`SUMMARY.md`](18_08_2026/SUMMARY.md) |
 | **`06_09_2026`** | 0 | N/A | N/A | [`SUMMARY.md`](06_09_2026/SUMMARY.md) |
-| **`05_09_2026_run2`** | 16 | 0.9155 | 0.7923 | [`SUMMARY.md`](05_09_2026_run2/SUMMARY.md) |
+| **`05_09_2026_run2`** | 23 | 0.9155 | 0.8262 | [`SUMMARY.md`](05_09_2026_run2/SUMMARY.md) |
 | **`05_09_2026`** | 15 | 0.9112 | 0.8116 | [`SUMMARY.md`](05_09_2026/SUMMARY.md) |
 | **`04_09_2026`** | 15 | 0.9175 | 0.8467 | [`SUMMARY.md`](04_09_2026/SUMMARY.md) |
 | **`03_09_2026_v2`** | 15 | 0.9291 | 0.8209 | [`SUMMARY.md`](03_09_2026_v2/SUMMARY.md) |
