@@ -504,9 +504,8 @@ def parse_args():
     parser.add_argument('--model', type=str, default='v1',
                         choices=['v1', 'v2', 'v3', 'v3small', 'v3large', 'v4', 'v4conv', 'v4convl', 'v5', 'all'],
                         help='Model variant to train or "all" to benchmark all generations')
-    parser.add_argument('--scenario', type=str, default='standard',
-                        choices=['standard', 'medium', 'low', 'maximum', 'custom'],
-                        help='Scenario preset from benchmark_scenarios.json (default: standard)')
+    parser.add_argument('--scenario', type=str, default='main',
+                        help='Scenario preset from benchmark_scenarios.json (default: main)')
     parser.add_argument('--scenarios-file', type=str, default='benchmark_scenarios.json',
                         help='Path to benchmark scenarios JSON configuration file')
     parser.add_argument('--session-dir', type=str, default=None,
