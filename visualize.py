@@ -21,6 +21,8 @@ import seaborn as sns
 from PIL import Image
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc, roc_auc_score
 
+from metrics import confusion_summary, decide_argmax, decide_malignant_gated, decide_prior_corrected
+
 import torch
 import torch.nn as nn
 from torchvision import transforms
@@ -81,6 +83,48 @@ def plot_training_curves(
 
 # ─── 2. Dual-View Confusion Matrices ──────────────────────────────────────────
 
+def _clinical_order(class_names: List[str]) -> List[int]:
+    preferred = ['nv', 'bkl', 'df', 'vasc', 'akiec', 'bcc', 'mel']
+    return [class_names.index(name) for name in preferred if name in class_names] + [i for i, name in enumerate(class_names) if name not in preferred]
+
+
+def _display_class_name(name: str, count: Optional[int] = None) -> str:
+    label = 'akiec / ACK+SCC' if name == 'akiec' else name
+    return f"{label} (n={count})" if count is not None else label
+
+
+def _draw_confusion_axis(ax, summary: dict, class_names: List[str], title: str, show_colorbar: bool = True):
+    order = _clinical_order(class_names)
+    present = set(summary['present_indices'].tolist())
+    rows = [i for i in order if i in present]
+    values = summary['row_recall'][np.ix_(rows, order)]
+    counts = summary['counts'][np.ix_(rows, order)]
+    annotations = np.empty(values.shape, dtype=object)
+    for i in range(len(rows)):
+        for j in range(len(order)):
+            annotations[i, j] = f"{counts[i, j]}\n{values[i, j]:.1%}"
+    xlabels = [_display_class_name(class_names[i]) + ('\n(absent)' if i not in present else '') for i in order]
+    ylabels = [_display_class_name(class_names[i], int(summary['row_totals'][i])) for i in rows]
+    sns.heatmap(values, annot=annotations, fmt='', cmap='YlGnBu', vmin=0, vmax=1,
+                xticklabels=xlabels, yticklabels=ylabels, cbar=show_colorbar, ax=ax,
+                annot_kws={"size": 8, "weight": "bold"}, linewidths=0.4, linecolor='#eeeeee')
+    for column, index in enumerate(order):
+        if index not in present:
+            ax.add_patch(plt.Rectangle((column, 0), 1, len(rows), facecolor='#d9d9d9', alpha=0.42, edgecolor='none'))
+    benign_count = sum(class_names[i] in {'nv', 'bkl', 'df', 'vasc'} for i in order)
+    if 0 < benign_count < len(order):
+        ax.axvline(benign_count, color='#d62728', linewidth=2)
+        malignant_rows = sum(class_names[i] in {'nv', 'bkl', 'df', 'vasc'} for i in rows)
+        if 0 < malignant_rows < len(rows):
+            ax.axhline(malignant_rows, color='#d62728', linewidth=2)
+    ax.set_title(title, fontsize=11, fontweight='bold', pad=10)
+    ax.set_xlabel('Predicted diagnostic class', fontsize=10)
+    ax.set_ylabel('True diagnostic class', fontsize=10)
+    ax.tick_params(axis='x', rotation=35)
+    ax.tick_params(axis='y', rotation=0)
+    return order
+
+
 def plot_confusion_matrices(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -88,31 +132,70 @@ def plot_confusion_matrices(
     output_path: Optional[Union[str, Path]] = None,
     model_name: str = "Model"
 ) -> plt.Figure:
-    """Plot dual confusion matrix: Raw counts & Normalized percentages side-by-side."""
-    cm_raw = confusion_matrix(y_true, y_pred, labels=range(len(class_names)))
-    with np.errstate(divide='ignore', invalid='ignore'):
-        cm_norm = cm_raw.astype('float') / cm_raw.sum(axis=1)[:, np.newaxis]
-        cm_norm = np.nan_to_num(cm_norm)
-
-    fig, axes = plt.subplots(1, 2, figsize=(16, 7))
+    """Plot a class-balanced confusion matrix with clinical group summary."""
+    malignant = [class_names.index(name) for name in ('akiec', 'bcc', 'mel') if name in class_names]
+    summary = confusion_summary(y_true, y_pred, class_names, malignant)
+    fig = plt.figure(figsize=(17, 8))
     fig.patch.set_facecolor('#fafafa')
+    grid = fig.add_gridspec(2, 2, width_ratios=[4.8, 1.5], height_ratios=[5, 1.15], hspace=0.42, wspace=0.28)
+    matrix_ax = fig.add_subplot(grid[0, 0])
+    order = _draw_confusion_axis(matrix_ax, summary, class_names, f"{model_name.upper()} — count and row recall")
 
-    # Raw counts
-    sns.heatmap(cm_raw, annot=True, fmt='d', cmap='Blues',
-                xticklabels=class_names, yticklabels=class_names,
-                cbar=True, ax=axes[0], annot_kws={"size": 10, "weight": "bold"})
-    axes[0].set_title(f"{model_name.upper()} — Sample Counts", fontsize=12, fontweight='bold', pad=10)
-    axes[0].set_xlabel('Predicted Diagnostic Class', fontsize=11, labelpad=8)
-    axes[0].set_ylabel('True Diagnostic Class', fontsize=11, labelpad=8)
+    precision_ax = fig.add_subplot(grid[1, 0])
+    precision = summary['column_precision'][order][None, :]
+    sns.heatmap(precision, annot=True, fmt='.1%', cmap='Blues', vmin=0, vmax=1, cbar=False,
+                xticklabels=[_display_class_name(class_names[i]) for i in order], yticklabels=['Precision'],
+                ax=precision_ax, annot_kws={"size": 9, "weight": "bold"})
+    precision_ax.tick_params(axis='x', rotation=35)
+    precision_ax.tick_params(axis='y', rotation=0)
+    precision_ax.set_xlabel('Predicted diagnostic class', fontsize=10)
 
-    # Normalized percentages
-    sns.heatmap(cm_norm, annot=True, fmt='.1%', cmap='YlGnBu',
-                xticklabels=class_names, yticklabels=class_names,
-                cbar=True, ax=axes[1], annot_kws={"size": 10, "weight": "bold"})
-    axes[1].set_title(f"{model_name.upper()} — Normalized Recall / Sensitivity", fontsize=12, fontweight='bold', pad=10)
-    axes[1].set_xlabel('Predicted Diagnostic Class', fontsize=11, labelpad=8)
-    axes[1].set_ylabel('True Diagnostic Class', fontsize=11, labelpad=8)
+    clinical_ax = fig.add_subplot(grid[:, 1])
+    clinical = summary['malignant']
+    binary_cm = np.array([[clinical['tn'], clinical['fp']], [clinical['fn'], clinical['tp']]])
+    sns.heatmap(binary_cm, annot=True, fmt='d', cmap='OrRd', cbar=False,
+                xticklabels=['Benign', 'Malignant'], yticklabels=['Benign', 'Malignant'],
+                ax=clinical_ax, annot_kws={"size": 12, "weight": "bold"})
+    clinical_ax.set_title(
+        f"Clinical screen\nSens {clinical['sensitivity']:.1%} · Spec {clinical['specificity']:.1%}\n"
+        f"PPV {clinical['ppv']:.1%} · NPV {clinical['npv']:.1%}", fontsize=11, fontweight='bold'
+    )
+    clinical_ax.set_xlabel('Predicted group')
+    clinical_ax.set_ylabel('True group')
+    fig.suptitle(f"Balanced accuracy {summary['balanced_accuracy']:.1%} · Macro F1 {summary['macro_f1']:.1%}", fontsize=12, fontweight='bold')
 
+    if output_path:
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(output_path, dpi=250, bbox_inches='tight')
+        plt.close(fig)
+    return fig
+
+
+def plot_decision_confusion_matrices(
+    probs: np.ndarray,
+    targets: np.ndarray,
+    class_names: List[str],
+    train_priors: np.ndarray,
+    tau: float,
+    malignant_threshold: float,
+    output_path: Optional[Union[str, Path]] = None,
+    model_name: str = "Model",
+) -> plt.Figure:
+    malignant = [class_names.index(name) for name in ('akiec', 'bcc', 'mel') if name in class_names]
+    decisions = [
+        ('Argmax', decide_argmax(probs)),
+        (f'Prior corrected (τ={tau:.1f})', decide_prior_corrected(probs, train_priors, tau)),
+        (f'Malignant gated (th={malignant_threshold:.2f})', decide_malignant_gated(probs, malignant_threshold, malignant)),
+    ]
+    fig, axes = plt.subplots(1, 3, figsize=(24, 7.5))
+    fig.patch.set_facecolor('#fafafa')
+    for ax, (label, predictions) in zip(axes, decisions):
+        summary = confusion_summary(targets, predictions, class_names, malignant)
+        clinical = summary['malignant']
+        title = (f"{label}\nBAcc {summary['balanced_accuracy']:.1%} · Macro F1 {summary['macro_f1']:.1%}\n"
+                 f"Mal sens {clinical['sensitivity']:.1%} · spec {clinical['specificity']:.1%}")
+        _draw_confusion_axis(ax, summary, class_names, title, show_colorbar=ax is axes[-1])
+    fig.suptitle(f"{model_name.upper()} — decision-rule comparison", fontsize=14, fontweight='bold')
     plt.tight_layout()
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)

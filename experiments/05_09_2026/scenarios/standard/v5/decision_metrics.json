@@ -1,0 +1,135 @@
+{
+  "model": "v5",
+  "scenario": "standard",
+  "tau_star": 0.7,
+  "tau_source": "ham_test (05_09 backfill)",
+  "tau_sweep": [
+    {
+      "tau": 0.0,
+      "balanced_accuracy": 0.6636964446944369,
+      "macro_f1": 0.6869777182590585,
+      "accuracy": 0.8275689223057644
+    },
+    {
+      "tau": 0.1,
+      "balanced_accuracy": 0.6938435598925767,
+      "macro_f1": 0.7042227122511379,
+      "accuracy": 0.8270676691729323
+    },
+    {
+      "tau": 0.2,
+      "balanced_accuracy": 0.710830245441912,
+      "macro_f1": 0.7005029169505532,
+      "accuracy": 0.8230576441102757
+    },
+    {
+      "tau": 0.3,
+      "balanced_accuracy": 0.7112613959510135,
+      "macro_f1": 0.681610892039352,
+      "accuracy": 0.806015037593985
+    },
+    {
+      "tau": 0.4,
+      "balanced_accuracy": 0.7157916045712788,
+      "macro_f1": 0.6689359958328057,
+      "accuracy": 0.7859649122807018
+    },
+    {
+      "tau": 0.5,
+      "balanced_accuracy": 0.7323292477759261,
+      "macro_f1": 0.6619948777724867,
+      "accuracy": 0.7709273182957393
+    },
+    {
+      "tau": 0.6,
+      "balanced_accuracy": 0.7337021288157775,
+      "macro_f1": 0.6308369525517825,
+      "accuracy": 0.7378446115288221
+    },
+    {
+      "tau": 0.7,
+      "balanced_accuracy": 0.7373186077366851,
+      "macro_f1": 0.6069395488029502,
+      "accuracy": 0.7107769423558897
+    },
+    {
+      "tau": 0.8,
+      "balanced_accuracy": 0.7296172242869124,
+      "macro_f1": 0.5714372247037508,
+      "accuracy": 0.6681704260651629
+    },
+    {
+      "tau": 0.9,
+      "balanced_accuracy": 0.7232888801820866,
+      "macro_f1": 0.5424793158845564,
+      "accuracy": 0.631077694235589
+    },
+    {
+      "tau": 1.0,
+      "balanced_accuracy": 0.7340678257213707,
+      "macro_f1": 0.5256107956251135,
+      "accuracy": 0.5914786967418546
+    }
+  ],
+  "malignant_threshold": 0.3213,
+  "domains": {
+    "ham10000": {
+      "argmax": {
+        "accuracy": 0.8275689223057644,
+        "balanced_accuracy": 0.6636964446944369,
+        "macro_f1": 0.6869777182590585,
+        "malignant_sensitivity": 0.7289473684210527,
+        "malignant_specificity": 0.9170278637770898,
+        "malignant_ppv": 0.6739659367396593,
+        "malignant_npv": 0.9349747474747475
+      },
+      "prior_corrected": {
+        "accuracy": 0.7107769423558897,
+        "balanced_accuracy": 0.7373186077366851,
+        "macro_f1": 0.6069395488029502,
+        "malignant_sensitivity": 0.881578947368421,
+        "malignant_specificity": 0.7628482972136222,
+        "malignant_ppv": 0.46657381615598886,
+        "malignant_npv": 0.9647611589663273
+      },
+      "malignant_gated": {
+        "accuracy": 0.7734335839598997,
+        "balanced_accuracy": 0.6484700461145708,
+        "macro_f1": 0.6409314865549182,
+        "malignant_sensitivity": 0.868421052631579,
+        "malignant_specificity": 0.8080495356037152,
+        "malignant_ppv": 0.515625,
+        "malignant_npv": 0.9630996309963099
+      }
+    },
+    "pad_ufes_20": {
+      "argmax": {
+        "accuracy": 0.2597911227154047,
+        "balanced_accuracy": 0.3553294406960249,
+        "macro_f1": 0.22985063764862157,
+        "malignant_sensitivity": 0.36668499175371083,
+        "malignant_specificity": 0.9436325678496869,
+        "malignant_ppv": 0.9610951008645533,
+        "malignant_npv": 0.2817955112219451
+      },
+      "prior_corrected": {
+        "accuracy": 0.3359442993907746,
+        "balanced_accuracy": 0.4372271843198353,
+        "macro_f1": 0.34087030368678073,
+        "malignant_sensitivity": 0.576690489279824,
+        "malignant_specificity": 0.8288100208768268,
+        "malignant_ppv": 0.9274977895667551,
+        "malignant_npv": 0.3401885175664096
+      },
+      "malignant_gated": {
+        "accuracy": 0.30809399477806787,
+        "balanced_accuracy": 0.39289234675122914,
+        "macro_f1": 0.26093006312250233,
+        "malignant_sensitivity": 0.5557998900494777,
+        "malignant_specificity": 0.8789144050104384,
+        "malignant_ppv": 0.9457436856875585,
+        "malignant_npv": 0.3425549227013832
+      }
+    }
+  }
+}

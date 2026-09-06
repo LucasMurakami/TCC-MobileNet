@@ -28,12 +28,14 @@ from dataset import (
     load_pad_ufes20_validation,
     ensure_pad_ufes20_download
 )
+from metrics import select_logit_adjust
 from train_timm_models import (
     MODEL_CONFIGS,
     SkinDataset,
     _evaluate_binary_triage,
     build_transforms,
     plot_confusion_matrices,
+    plot_decision_confusion_matrices,
     plot_per_class_metrics,
     plot_roc_curves
 )
@@ -251,6 +253,15 @@ def main():
     calibrated_mel_th = ham_results['mel_triage_threshold']
     calibrated_bcc_th = ham_results['bcc_triage_threshold']
     calibrated_mal_th = ham_results['malignant_triage_threshold']
+    prior_path = session_dir / 'class_priors.json'
+    if prior_path.exists():
+        with open(prior_path) as f:
+            prior_map = json.load(f)
+        class_priors = np.asarray([prior_map[name] for name in CLASS_NAMES], dtype=float)
+    else:
+        class_priors = np.bincount(ham_targets, minlength=NUM_CLASSES).astype(float)
+        class_priors /= class_priors.sum()
+    selected_tau, _ = select_logit_adjust(ham_results['all_probs'], ham_results['all_targets'], class_priors)
     ham_test_targets = np.array([CLASS_NAMES.index(c) for c in ham_test_df['dx']])
     ham_test_results = evaluate_ensemble(
         loaded_models, ham_test_loaders, ham_test_targets, device, precision_dtype,
@@ -294,6 +305,8 @@ def main():
         'pad_bcc_triage_spec': pad_results['bcc_triage_spec'],
         'pad_bcc_triage_detected': pad_results['bcc_triage_detected'],
         'malignant_triage_threshold': calibrated_mal_th,
+        'selected_logit_adjust': selected_tau,
+        'logit_adjust_source': 'ham_val_balanced_accuracy',
         'pad_malignant_triage_recall': pad_results['malignant_triage_recall'],
         'pad_malignant_triage_spec': pad_results['malignant_triage_spec'],
         'pad_malignant_triage_detected': pad_results['malignant_triage_detected']
@@ -303,6 +316,14 @@ def main():
         json.dump(summary, f, indent=2)
 
     plot_confusion_matrices(pad_results['all_targets'], pad_results['all_preds'], CLASS_NAMES, output_dir / 'pad_confusion_matrix.png', model_name="Ensemble (PAD-UFES-20)")
+    plot_decision_confusion_matrices(
+        ham_test_results['all_probs'], ham_test_results['all_targets'], CLASS_NAMES, class_priors,
+        selected_tau, calibrated_mal_th, output_dir / 'ham_confusion_matrix_decision.png', model_name="Ensemble (HAM10000 Test)"
+    )
+    plot_decision_confusion_matrices(
+        pad_results['all_probs'], pad_results['all_targets'], CLASS_NAMES, class_priors,
+        selected_tau, calibrated_mal_th, output_dir / 'pad_confusion_matrix_decision.png', model_name="Ensemble (PAD-UFES-20)"
+    )
     plot_roc_curves(pad_results['all_targets'], pad_results['all_probs'], CLASS_NAMES, output_dir / 'pad_roc_curves.png', model_name="Ensemble (PAD-UFES-20)")
 
     print("\n" + "=" * 80)

@@ -2,7 +2,7 @@ import logging
 from typing import Callable, Sequence
 
 import numpy as np
-from sklearn.metrics import classification_report, roc_auc_score, roc_curve
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, roc_auc_score, roc_curve
 
 
 logger = logging.getLogger(__name__)
@@ -195,6 +195,111 @@ def compute_classification_metrics(probs, targets, class_names: Sequence[str]) -
     metrics.update({f"{name}_recall": recall for name, recall in per_class_recall.items()})
     metrics.update({f"{name}_auc_roc": score for name, score in per_class_auc.items()})
     return metrics
+
+
+def _decision_inputs(probs, targets=None):
+    probs_array = np.asarray(probs, dtype=float)
+    if probs_array.ndim != 2 or probs_array.shape[1] < 2 or len(probs_array) == 0:
+        raise ValueError("probs must be a non-empty two-dimensional array with at least two classes")
+    if not np.all(np.isfinite(probs_array)) or np.any(probs_array < 0):
+        raise ValueError("probs must contain finite non-negative values")
+    if targets is None:
+        return probs_array
+    targets_array = np.asarray(targets)
+    if targets_array.ndim != 1 or len(targets_array) != len(probs_array):
+        raise ValueError("targets must be one-dimensional and match probs")
+    return probs_array, targets_array.astype(int, copy=False)
+
+
+def decide_argmax(probs) -> np.ndarray:
+    return _decision_inputs(probs).argmax(axis=1)
+
+
+def decide_prior_corrected(probs, train_priors, tau: float) -> np.ndarray:
+    probs_array = _decision_inputs(probs)
+    priors = np.asarray(train_priors, dtype=float)
+    if priors.shape != (probs_array.shape[1],) or not np.all(np.isfinite(priors)) or np.any(priors <= 0):
+        raise ValueError("train_priors must be positive, finite, and match the number of classes")
+    if not np.isfinite(tau) or tau < 0:
+        raise ValueError("tau must be a finite non-negative value")
+    scores = np.log(np.clip(probs_array, 1e-12, None)) - float(tau) * np.log(priors)
+    return scores.argmax(axis=1)
+
+
+def decide_malignant_gated(probs, threshold: float, malignant_indices: Sequence[int]) -> np.ndarray:
+    probs_array = _decision_inputs(probs)
+    malignant = np.asarray(list(malignant_indices), dtype=int)
+    if len(malignant) == 0 or len(np.unique(malignant)) != len(malignant):
+        raise ValueError("malignant_indices must contain unique class indices")
+    if np.any((malignant < 0) | (malignant >= probs_array.shape[1])):
+        raise ValueError("malignant_indices contain an out-of-range class index")
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("threshold must be between 0 and 1")
+    benign = np.setdiff1d(np.arange(probs_array.shape[1]), malignant)
+    gate = probs_array[:, malignant].sum(axis=1) >= threshold
+    predictions = np.empty(len(probs_array), dtype=int)
+    predictions[gate] = malignant[probs_array[gate][:, malignant].argmax(axis=1)]
+    predictions[~gate] = benign[probs_array[~gate][:, benign].argmax(axis=1)]
+    return predictions
+
+
+def _balanced_accuracy(targets, predictions) -> float:
+    labels = np.unique(targets)
+    return float(np.mean([np.mean(predictions[targets == label] == label) for label in labels]))
+
+
+def select_logit_adjust(probs_val, targets_val, train_priors, grid=None) -> tuple[float, list[dict]]:
+    probs_array, targets_array = _decision_inputs(probs_val, targets_val)
+    candidates = np.arange(0.0, 1.01, 0.1) if grid is None else np.asarray(grid, dtype=float)
+    if candidates.ndim != 1 or len(candidates) == 0 or not np.all(np.isfinite(candidates)) or np.any(candidates < 0):
+        raise ValueError("grid must contain finite non-negative values")
+    table = []
+    for tau in candidates:
+        predictions = decide_prior_corrected(probs_array, train_priors, float(tau))
+        table.append({
+            "tau": round(float(tau), 4),
+            "balanced_accuracy": _balanced_accuracy(targets_array, predictions),
+            "macro_f1": float(f1_score(targets_array, predictions, labels=np.unique(targets_array), average="macro", zero_division=0)),
+            "accuracy": float(np.mean(predictions == targets_array)),
+        })
+    best = max(table, key=lambda row: (row["balanced_accuracy"], row["macro_f1"], -row["tau"]))
+    return float(best["tau"]), table
+
+
+def confusion_summary(targets, predictions, class_names: Sequence[str], malignant_indices: Sequence[int] = (0, 1, 4), present_only: bool = True) -> dict:
+    targets_array = np.asarray(targets, dtype=int)
+    predictions_array = np.asarray(predictions, dtype=int)
+    names = list(class_names)
+    if targets_array.ndim != 1 or predictions_array.ndim != 1 or len(targets_array) != len(predictions_array) or len(targets_array) == 0:
+        raise ValueError("targets and predictions must be non-empty matching one-dimensional arrays")
+    if not names or np.any((targets_array < 0) | (targets_array >= len(names))) or np.any((predictions_array < 0) | (predictions_array >= len(names))):
+        raise ValueError("class_names must cover all target and prediction indices")
+    cm = confusion_matrix(targets_array, predictions_array, labels=range(len(names)))
+    row_totals = cm.sum(axis=1)
+    column_totals = cm.sum(axis=0)
+    row_recall = np.divide(cm, row_totals[:, None], out=np.zeros_like(cm, dtype=float), where=row_totals[:, None] != 0)
+    column_precision = np.divide(np.diag(cm), column_totals, out=np.zeros(len(names), dtype=float), where=column_totals != 0)
+    present = np.flatnonzero(row_totals > 0)
+    malignant = np.asarray(list(malignant_indices), dtype=int)
+    true_malignant = np.isin(targets_array, malignant)
+    pred_malignant = np.isin(predictions_array, malignant)
+    tp = int(np.sum(true_malignant & pred_malignant))
+    fn = int(np.sum(true_malignant & ~pred_malignant))
+    fp = int(np.sum(~true_malignant & pred_malignant))
+    tn = int(np.sum(~true_malignant & ~pred_malignant))
+    div = lambda n, d: float(n / d) if d else 0.0
+    selected_rows = present if present_only else np.arange(len(names))
+    return {
+        "counts": cm,
+        "row_recall": row_recall,
+        "column_precision": column_precision,
+        "row_totals": row_totals,
+        "present_indices": selected_rows,
+        "balanced_accuracy": _balanced_accuracy(targets_array, predictions_array),
+        "macro_f1": float(f1_score(targets_array, predictions_array, labels=present, average="macro", zero_division=0)),
+        "accuracy": float(np.mean(targets_array == predictions_array)),
+        "malignant": {"tp": tp, "fn": fn, "fp": fp, "tn": tn, "sensitivity": div(tp, tp + fn), "specificity": div(tn, tn + fp), "ppv": div(tp, tp + fp), "npv": div(tn, tn + fn)},
+    }
 
 
 def expected_calibration_error(probs, targets, n_bins: int = 15) -> float:

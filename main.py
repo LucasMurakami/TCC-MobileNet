@@ -221,6 +221,14 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
         try:
             with open(rf, 'r') as f:
                 data = json.load(f)
+            decision_file = rf.parent / 'decision_metrics.json'
+            decision_data = {}
+            if decision_file.exists():
+                with open(decision_file, 'r') as f:
+                    decision_data = json.load(f)
+            decision_domains = decision_data.get('domains', {})
+            ham_decisions = decision_domains.get('ham10000', {})
+            pad_decisions = decision_domains.get('pad_ufes_20', {})
 
             # Determine scenario and model name from path
             rel_parts = rf.relative_to(session_dir).parts
@@ -244,6 +252,14 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
                 'ham_accuracy': round(ham_acc, 4),
                 'pad_restricted_5class_acc': round(float(data.get('pad_restricted_5class_acc', 0.0)), 4),
                 'pad_macro_auc_roc': round(float(data.get('pad_macro_auc_roc', 0.0)), 4),
+                'ham_bacc': round(float(data.get('ham_balanced_accuracy', ham_decisions.get('argmax', {}).get('balanced_accuracy', 0.0))), 4),
+                'pad_bacc': round(float(data.get('pad_balanced_accuracy', pad_decisions.get('argmax', {}).get('balanced_accuracy', 0.0))), 4),
+                'tau_star': data.get('selected_logit_adjust', decision_data.get('tau_star')),
+                'tau_source': data.get('logit_adjust_source', decision_data.get('tau_source')),
+                'ham_bacc_tau': round(float(data.get('ham_balanced_accuracy_tau', ham_decisions.get('prior_corrected', {}).get('balanced_accuracy', 0.0))), 4),
+                'pad_bacc_tau': round(float(data.get('pad_balanced_accuracy_tau', pad_decisions.get('prior_corrected', {}).get('balanced_accuracy', 0.0))), 4),
+                'ham_mal_sens_gated': round(float(data.get('ham_malignant_gated_sensitivity', ham_decisions.get('malignant_gated', {}).get('malignant_sensitivity', 0.0))), 4),
+                'pad_mal_sens_gated': round(float(data.get('pad_malignant_gated_sensitivity', pad_decisions.get('malignant_gated', {}).get('malignant_sensitivity', 0.0))), 4),
                 'checkpoint_sha256': data.get('checkpoint_sha256'),
                 'selected_epoch': data.get('selected_epoch'),
                 'selected_loop_acc': round(float(data.get('selected_epoch_loop_accuracy', 0.0)), 4),
@@ -298,6 +314,11 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
         consistency_header = '| ' + ' | '.join(consistency_columns) + ' |\n| ' + ' | '.join([':---' for _ in consistency_columns]) + ' |\n'
         consistency_rows = '\n'.join(['| ' + ' | '.join(str(value) for value in row) + ' |' for row in consistency_df.values])
         consistency_md = consistency_header + consistency_rows
+        decision_columns = ['scenario', 'model', 'ham_bacc', 'ham_bacc_tau', 'pad_bacc', 'pad_bacc_tau', 'tau_star', 'tau_source', 'ham_mal_sens_gated', 'pad_mal_sens_gated']
+        decision_df = df[decision_columns]
+        decision_header = '| ' + ' | '.join(decision_columns) + ' |\n| ' + ' | '.join([':---' for _ in decision_columns]) + ' |\n'
+        decision_rows = '\n'.join(['| ' + ' | '.join(str(value) for value in row) + ' |' for row in decision_df.values])
+        decision_md = decision_header + decision_rows
 
         summary_md = f"""# 🏆 Skin Lesion Benchmark: Session Leaderboard ({session_dir.name})
 
@@ -307,13 +328,17 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
 
 {table_md}
 
+### Decision-rule comparison
+
+{decision_md}
+
 ### Evaluation consistency
 
 {consistency_md}
 
 ---
 """
-        with open(session_dir / 'SUMMARY.md', 'w') as f:
+        with open(session_dir / 'SUMMARY.md', 'w', encoding='utf-8') as f:
             f.write(summary_md)
 
         # Update summary_comparison.json & plot if applicable

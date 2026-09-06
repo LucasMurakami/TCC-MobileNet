@@ -38,9 +38,13 @@ from tqdm import tqdm
 from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, roc_curve, auc
 
 from dataset import CLASS_NAMES, NUM_CLASSES
-from metrics import _evaluate_binary_triage, bootstrap_metric_ci, expected_calibration_error, meets_auc_target, restricted_class_accuracy
+from metrics import (
+    _evaluate_binary_triage, bootstrap_metric_ci, confusion_summary, decide_argmax,
+    decide_malignant_gated, decide_prior_corrected, expected_calibration_error,
+    meets_auc_target, restricted_class_accuracy, select_logit_adjust,
+)
 from visualize import (
-    plot_training_curves, plot_confusion_matrices,
+    plot_training_curves, plot_confusion_matrices, plot_decision_confusion_matrices,
     plot_per_class_metrics, generate_gradcam_gallery, plot_domain_comparison,
     plot_roc_curves, plot_dual_roc_comparison, plot_reliability_diagram
 )
@@ -374,7 +378,7 @@ def evaluate_dataset(
         use_tta: If True, averages probabilities over original, horizontal-flip, and vertical-flip views.
     """
     model.eval()
-    all_preds, all_targets, all_probs = [], [], []
+    all_preds, all_targets, all_probs, all_logits = [], [], [], []
     v_loss, v_corr, v_tot = 0.0, 0, 0
     if criterion is None:
         criterion = nn.CrossEntropyLoss()
@@ -394,10 +398,13 @@ def evaluate_dataset(
                     outputs.append(model(view))
                 loss = criterion(torch.stack(outputs).mean(dim=0), y)
 
-            adjusted_outputs = [output.float() - float(logit_adjust) * log_priors if log_priors is not None else output.float() for output in outputs]
-            probs = torch.stack([torch.softmax(output, dim=1) for output in adjusted_outputs]).mean(dim=0)
-            preds = probs.argmax(dim=1)
+            float_outputs = [output.float() for output in outputs]
+            probs = torch.stack([torch.softmax(output, dim=1) for output in float_outputs]).mean(dim=0)
+            decision_outputs = [output - float(logit_adjust) * log_priors for output in float_outputs] if log_priors is not None else float_outputs
+            decision_probs = torch.stack([torch.softmax(output, dim=1) for output in decision_outputs]).mean(dim=0)
+            preds = decision_probs.argmax(dim=1)
             all_probs.extend(probs.cpu().numpy())
+            all_logits.extend(torch.stack(float_outputs).mean(dim=0).cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
             all_targets.extend(y.cpu().numpy())
             v_loss += loss.item() * len(y)
@@ -407,6 +414,7 @@ def evaluate_dataset(
     all_preds = np.array(all_preds)
     all_targets = np.array(all_targets)
     all_probs = np.array(all_probs)
+    all_logits = np.array(all_logits)
     report = classification_report(all_targets, all_preds, labels=range(NUM_CLASSES), target_names=CLASS_NAMES, output_dict=True, zero_division=0)
 
     # 1. Continuous Melanoma AUC-ROC
@@ -506,6 +514,7 @@ def evaluate_dataset(
         'all_preds': all_preds,
         'all_targets': all_targets,
         'all_probs': all_probs,
+        'all_logits': all_logits,
         'report': report
     }
 
@@ -566,10 +575,46 @@ def save_prediction_artifacts(domain_dir: Path, results: dict, frame: pd.DataFra
     domain_dir.mkdir(parents=True, exist_ok=True)
     np.save(domain_dir / 'all_probs.npy', results['all_probs'])
     np.save(domain_dir / 'all_targets.npy', results['all_targets'])
+    if 'all_logits' in results:
+        np.save(domain_dir / 'all_logits.npy', results['all_logits'])
     if 'lesion_id' not in frame.columns:
         raise KeyError("Cluster-bootstrap evaluation requires lesion_id")
     groups = frame['lesion_id'].astype(str).to_numpy().astype(str)
     np.save(domain_dir / 'lesion_ids.npy', groups)
+
+
+def compute_decision_metrics(probs, targets, class_priors, tau, malignant_threshold):
+    malignant = [CLASS_NAMES.index(name) for name in ('akiec', 'bcc', 'mel')]
+    decisions = {
+        'argmax': decide_argmax(probs),
+        'prior_corrected': decide_prior_corrected(probs, class_priors, tau),
+        'malignant_gated': decide_malignant_gated(probs, malignant_threshold, malignant),
+    }
+    summaries = {name: confusion_summary(targets, predictions, CLASS_NAMES, malignant) for name, predictions in decisions.items()}
+    metrics = {}
+    for name, summary in summaries.items():
+        metrics[name] = {
+            'accuracy': summary['accuracy'],
+            'balanced_accuracy': summary['balanced_accuracy'],
+            'macro_f1': summary['macro_f1'],
+            'malignant_sensitivity': summary['malignant']['sensitivity'],
+            'malignant_specificity': summary['malignant']['specificity'],
+        }
+    return metrics, decisions, summaries
+
+
+def save_decision_artifacts(domain_dir, results, class_priors, tau, malignant_threshold, model_name):
+    metrics, decisions, summaries = compute_decision_metrics(
+        results['all_probs'], results['all_targets'], class_priors, tau, malignant_threshold
+    )
+    np.save(domain_dir / 'confusion_argmax.npy', summaries['argmax']['counts'])
+    np.save(domain_dir / 'confusion_tau.npy', summaries['prior_corrected']['counts'])
+    np.save(domain_dir / 'confusion_gated.npy', summaries['malignant_gated']['counts'])
+    plot_decision_confusion_matrices(
+        results['all_probs'], results['all_targets'], CLASS_NAMES, class_priors, tau, malignant_threshold,
+        domain_dir / 'confusion_matrix_decision.png', model_name=model_name
+    )
+    return metrics
 
 
 def train_single_model(
@@ -635,7 +680,7 @@ def train_single_model(
     eval_precision = str(getattr(args, 'eval_precision', 'fp32')).lower()
     eval_autocast = eval_precision in ('amp', 'bf16', 'fp16')
     eval_kwargs = {
-        'logit_adjust': float(getattr(args, 'logit_adjust', 0.0) or 0.0),
+        'logit_adjust': 0.0,
         'class_priors': compute_class_priors(train_df['dx']),
         'use_tta': use_tta,
         'autocast': eval_autocast,
@@ -977,6 +1022,15 @@ def train_single_model(
     calibrated_th = ham_val_results['mel_triage_threshold']
     calibrated_bcc_th = ham_val_results['bcc_triage_threshold']
     calibrated_mal_th = ham_val_results['malignant_triage_threshold']
+    class_priors = np.asarray(eval_kwargs['class_priors'], dtype=float)
+    auto_tau, tau_sweep = select_logit_adjust(ham_val_results['all_probs'], ham_val_results['all_targets'], class_priors)
+    selected_tau = float(logit_adjust) if logit_adjust > 0.0 else auto_tau
+    tau_source = 'manual' if logit_adjust > 0.0 else 'ham_val_balanced_accuracy'
+    ham_val_dir = model_dir / 'ham_validation'
+    save_prediction_artifacts(ham_val_dir, ham_val_results, ham_val_df)
+    ham_val_decision_metrics, _, _ = compute_decision_metrics(
+        ham_val_results['all_probs'], ham_val_results['all_targets'], class_priors, selected_tau, calibrated_mal_th
+    )
 
     ham_results = evaluate_dataset(
         model, ham_test_loader, device, precision_dtype, has_cuda,
@@ -999,6 +1053,9 @@ def train_single_model(
     plot_per_class_metrics(ham_results['report'], CLASS_NAMES, ham_dir / 'per_class_metrics.png', model_name=f"{model_name} (HAM10000 Test)")
     plot_roc_curves(ham_results['all_targets'], ham_results['all_probs'], CLASS_NAMES, ham_dir / 'roc_curves.png', model_name=f"{model_name} (HAM10000 Test)")
     plot_reliability_diagram(ham_results['all_probs'], ham_results['all_targets'], ham_dir / 'reliability_diagram.png', model_name=f"{model_name} (HAM10000 Test)")
+    ham_decision_metrics = save_decision_artifacts(
+        ham_dir, ham_results, class_priors, selected_tau, calibrated_mal_th, f"{model_name} (HAM10000 Test)"
+    )
     generate_gradcam_gallery(model=model, val_df=ham_test_df, class_names=CLASS_NAMES, img_size=img_size, output_path=ham_dir / 'gradcam_heatmaps.png', model_name=f"{model_name}_HAM", device=device, transform=val_transform)
 
     pad_results = evaluate_dataset(
@@ -1022,6 +1079,9 @@ def train_single_model(
     plot_per_class_metrics(pad_results['report'], CLASS_NAMES, pad_dir / 'per_class_metrics.png', model_name=f"{model_name} (PAD-UFES-20)")
     plot_roc_curves(pad_results['all_targets'], pad_results['all_probs'], CLASS_NAMES, pad_dir / 'roc_curves.png', model_name=f"{model_name} (PAD-UFES-20)")
     plot_reliability_diagram(pad_results['all_probs'], pad_results['all_targets'], pad_dir / 'reliability_diagram.png', model_name=f"{model_name} (PAD-UFES-20)")
+    pad_decision_metrics = save_decision_artifacts(
+        pad_dir, pad_results, class_priors, selected_tau, calibrated_mal_th, f"{model_name} (PAD-UFES-20)"
+    )
     generate_gradcam_gallery(model=model, val_df=pad_val_df, class_names=CLASS_NAMES, img_size=img_size, output_path=pad_dir / 'gradcam_heatmaps.png', model_name=f"{model_name}_PAD", device=device, transform=val_transform)
 
     shared_indices = [CLASS_NAMES.index(c) for c in ['akiec', 'bcc', 'bkl', 'mel', 'nv']]
@@ -1066,6 +1126,9 @@ def train_single_model(
         'malignant_triage_threshold': calibrated_mal_th,
         'balanced_sampling': balanced_sampling,
         'logit_adjust': logit_adjust,
+        'selected_logit_adjust': selected_tau,
+        'logit_adjust_source': tau_source,
+        'logit_adjust_sweep': tau_sweep,
         'mixup_alpha': mixup_alpha,
         'color_constancy': use_color_constancy,
         'use_tta': use_tta,
@@ -1083,6 +1146,9 @@ def train_single_model(
         'ham_val_macro_auc_ci_high': ham_val_results['macro_auc_ci_high'],
         'ham_val_expected_calibration_error': ham_val_results['expected_calibration_error'],
         'ham_val_mean_mel_probability': ham_val_results['mean_mel_probability'],
+        'ham_val_balanced_accuracy': ham_val_decision_metrics['argmax']['balanced_accuracy'],
+        'ham_val_balanced_accuracy_tau': ham_val_decision_metrics['prior_corrected']['balanced_accuracy'],
+        'ham_val_macro_f1_tau': ham_val_decision_metrics['prior_corrected']['macro_f1'],
 
         # Stage 2 In-Domain HAM10000 Test Metrics
         'ham_accuracy': ham_results['accuracy'],
@@ -1104,6 +1170,11 @@ def train_single_model(
         'ham_test_macro_auc_ci_high': ham_results['macro_auc_ci_high'],
         'ham_harmonized_5class_acc': ham_results['harmonized_5class_acc'],
         'ham_expected_calibration_error': ham_results['expected_calibration_error'],
+        'ham_balanced_accuracy': ham_decision_metrics['argmax']['balanced_accuracy'],
+        'ham_balanced_accuracy_tau': ham_decision_metrics['prior_corrected']['balanced_accuracy'],
+        'ham_macro_f1_tau': ham_decision_metrics['prior_corrected']['macro_f1'],
+        'ham_malignant_gated_sensitivity': ham_decision_metrics['malignant_gated']['malignant_sensitivity'],
+        'ham_malignant_gated_specificity': ham_decision_metrics['malignant_gated']['malignant_specificity'],
         'ham_test_macro_auc_5class': ham_macro_auc_5class,
         'ham_mel_triage_recall': ham_results['mel_triage_recall'],
         'ham_mel_triage_spec': ham_results['mel_triage_spec'],
@@ -1137,6 +1208,11 @@ def train_single_model(
         'pad_harmonized_5class_acc': pad_results['harmonized_5class_acc'],
         'pad_restricted_5class_acc': pad_results['restricted_5class_acc'],
         'pad_expected_calibration_error': pad_results['expected_calibration_error'],
+        'pad_balanced_accuracy': pad_decision_metrics['argmax']['balanced_accuracy'],
+        'pad_balanced_accuracy_tau': pad_decision_metrics['prior_corrected']['balanced_accuracy'],
+        'pad_macro_f1_tau': pad_decision_metrics['prior_corrected']['macro_f1'],
+        'pad_malignant_gated_sensitivity': pad_decision_metrics['malignant_gated']['malignant_sensitivity'],
+        'pad_malignant_gated_specificity': pad_decision_metrics['malignant_gated']['malignant_specificity'],
         'pad_oracle_mel_triage_threshold': pad_oracle['mel_triage_threshold'],
         'pad_oracle_mel_triage_recall': pad_oracle['mel_triage_recall'],
         'pad_oracle_mel_triage_spec': pad_oracle['mel_triage_spec'],

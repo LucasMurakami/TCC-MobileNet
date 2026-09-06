@@ -26,6 +26,25 @@ def test_fp32_cpu_evaluation_path():
     assert 0.0 <= result['expected_calibration_error'] <= 1.0
 
 
+def test_logit_adjust_changes_decisions_not_probabilities():
+    class FixedModel(torch.nn.Module):
+        def forward(self, inputs):
+            return torch.tensor([[2.0, 1.8, 0, 0, 0, 0, 0]], dtype=inputs.dtype).repeat(len(inputs), 1)
+
+    inputs = torch.zeros(2, 3, 2, 2)
+    targets = torch.zeros(2, dtype=torch.long)
+    loader = DataLoader(TensorDataset(inputs, targets), batch_size=2)
+    base = evaluate_dataset(FixedModel(), loader, torch.device('cpu'), torch.float32, False)
+    adjusted = evaluate_dataset(
+        FixedModel(), loader, torch.device('cpu'), torch.float32, False,
+        logit_adjust=0.5, class_priors=[0.8, 0.02, 0.036, 0.036, 0.036, 0.036, 0.036]
+    )
+    torch.testing.assert_close(torch.tensor(base['all_probs']), torch.tensor(adjusted['all_probs']))
+    assert base['all_preds'][0] == 0
+    assert adjusted['all_preds'][0] == 1
+    assert adjusted['all_logits'].shape == (2, 7)
+
+
 def test_evaluation_accuracy_consistency_guard():
     small_delta, small_warning = evaluation_accuracy_consistency(0.81, 0.80)
     assert small_delta == pytest.approx(0.01)
