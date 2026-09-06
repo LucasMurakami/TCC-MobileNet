@@ -75,9 +75,10 @@ def test_benchmark_scenarios_file_is_consistent():
         scenarios = json.load(f)['scenarios']
     main = scenarios['main']
     assert not main['optional']
-    for model in ('v1', 'v2', 'v3', 'v4'):
+    for model in ('v1', 'v2', 'v3'):
         assert main['models'][model]['seeds'] == [42, 43, 44]
-    assert main['models']['v5']['seeds'] == [42]
+    assert main['models']['v4']['seeds'] == [42, 43, 44, 45]
+    assert main['models']['v5']['seeds'] == [42, 43, 44]
     assert main['models']['v4']['epochs'] >= 45 and main['models']['v4']['patience'] >= 8
     baseline = main['models']['v3']
     for name in ('ablation_no_sampler', 'ablation_no_focal', 'ablation_no_mixup'):

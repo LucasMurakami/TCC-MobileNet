@@ -1,8 +1,8 @@
 {
   "scenarios": {
     "main": {
-      "name": "Main (per-model budget, 3 seeds for v1-v4)",
-      "description": "Single training budget per architecture. v1-v4 run with seeds 42/43/44 on a fixed split (split_seed 42); v5 runs once. Replaces the low/medium/standard axis, which only changed the selected epoch.",
+      "name": "Main (per-model budget, multi-seed)",
+      "description": "Single training budget per architecture. v1-v3 run with seeds 42/43/44, v4 with seeds 42/43/44/45, and v5 with seeds 42/43/44 on a fixed split (split_seed 42). Replaces the low/medium/standard axis, which only changed the selected epoch.",
       "priority": 1,
       "optional": false,
       "split_seed": 42,
@@ -22,8 +22,8 @@
         "v1": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42, 43, 44]},
         "v2": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42, 43, 44]},
         "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42, 43, 44]},
-        "v4": {"epochs": 45, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00003, "patience": 8, "seeds": [42, 43, 44]},
-        "v5": {"epochs": 40, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00003, "patience": 6, "seeds": [42]}
+        "v4": {"epochs": 45, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00003, "patience": 8, "seeds": [42, 43, 44, 45]},
+        "v5": {"epochs": 40, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00003, "patience": 6, "seeds": [42, 43, 44]}
       }
     },
     "ablation_no_sampler": {
