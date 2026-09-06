@@ -339,7 +339,18 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
 
     df = pd.DataFrame(records)
     if not df.empty:
-        df = df.sort_values(by=['mel_auc_roc', 'ham_mel_auc_roc'], ascending=[False, False])
+        def scenario_sort_order(sc: str) -> int:
+            if sc == 'main':
+                return 0
+            if sc.startswith('ablation'):
+                return 1
+            if sc in ('standard', 'medium', 'low') or sc.startswith('legacy'):
+                return 3
+            return 2
+
+        df['_sc_order'] = df['scenario'].map(scenario_sort_order)
+        df = df.sort_values(by=['_sc_order', 'mel_auc_roc', 'ham_mel_auc_roc', 'scenario', 'model', 'seed'],
+                            ascending=[True, False, False, True, True, True]).drop(columns=['_sc_order'])
         duplicate_of = {}
         first_seen = {}
         for _, row in df.iterrows():
