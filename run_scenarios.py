@@ -47,7 +47,24 @@ def parse_args():
     parser.add_argument('--python-bin', type=str, default=sys.executable,
                         help="Path to Python virtualenv binary")
     parser.add_argument('--no-cudnn', action='store_true', default=False, help="Disable cuDNN compatibility path")
+    parser.add_argument('--seeds', nargs='+', type=int, default=None,
+                        help="Override training seeds for every model (default: per-model 'seeds' list in the scenario file)")
+    parser.add_argument('--allow-dirty', action='store_true', default=False,
+                        help="Run even if the git working tree has uncommitted changes (git_sha would not reproduce the run)")
     return parser.parse_args()
+
+
+def git_working_tree_status() -> tuple:
+    """Returns (sha, list_of_dirty_paths); (None, []) when git is unavailable."""
+    try:
+        sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+        dirty = subprocess.check_output(['git', 'status', '--porcelain'], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None, []
+    # porcelain v1: two status chars, a space, then the path (renames appear as "old -> new").
+    dirty_paths = [line[3:].split(' -> ')[-1].strip() for line in dirty.splitlines() if len(line) > 3]
+    tracked_code = [p for p in dirty_paths if not p.startswith('experiments/') and not p.endswith('.md')]
+    return sha, tracked_code
 
 
 def resolve_session_directory(root_dir: Path, session_id: str = None, resume: bool = False) -> tuple:
@@ -76,7 +93,7 @@ def resolve_session_directory(root_dir: Path, session_id: str = None, resume: bo
         return base_date, base_dir
 
 
-from main import resolve_run_config, update_session_leaderboard, update_global_archive_index
+from main import resolve_run_config, resolve_seeds, update_session_leaderboard, update_global_archive_index
 
 
 def is_experiment_completed(exp_dir: Path) -> bool:
@@ -151,6 +168,13 @@ class TeeLogger:
 
 def main():
     args = parse_args()
+    git_sha, dirty_code = git_working_tree_status()
+    if dirty_code and not args.allow_dirty:
+        print("Refusing to start: uncommitted changes in tracked code would make git_sha non-reproducible:")
+        for path in dirty_code:
+            print(f"  {path}")
+        print("Commit first, or pass --allow-dirty to override.")
+        raise SystemExit(2)
     root_dir = Path(args.experiments_root)
     root_dir.mkdir(parents=True, exist_ok=True)
 
@@ -222,33 +246,35 @@ def main():
         print(f"{'#'*85}\n")
 
         models_dict = s_info['models']
-        target_models = args.models if args.models else list(models_dict.keys())
+        target_models = [m for m in (args.models if args.models else list(models_dict.keys())) if m in models_dict]
+        jobs = []
+        for model_name in target_models:
+            for seed in (args.seeds or resolve_seeds(s_info, models_dict[model_name])):
+                jobs.append((model_name, int(seed)))
 
-        for m_idx, model_name in enumerate(target_models, start=1):
-            if model_name not in models_dict:
-                continue
-
+        for m_idx, (model_name, seed) in enumerate(jobs, start=1):
             cfg = models_dict[model_name]
             cli_defaults = argparse.Namespace(
-                epochs=None, patience=None, batch_size=None, lr_stage1=None, lr_stage2=None, seed=None,
+                epochs=None, patience=None, batch_size=None, lr_stage1=None, lr_stage2=None, seed=seed,
                 img_size=None, mel_threshold=None, bcc_threshold=None, malignant_threshold=None,
                 balanced_sampling=False, logit_adjust=None, mixup_alpha=None, use_tta=False,
                 color_constancy=False, stage1_epochs=None, eval_precision=None,
-                selection_min_delta=None, no_cudnn=args.no_cudnn
+                selection_min_delta=None, no_cudnn=args.no_cudnn, loss=None,
+                no_temperature_scaling=False, split_seed=None
             )
             resolved = resolve_run_config(cli_defaults, s_info, cfg)
             epochs, bs = resolved.epochs, resolved.batch_size
-            lr1, lr2, pat, seed = resolved.lr_stage1, resolved.lr_stage2, resolved.patience, resolved.seed
+            lr1, lr2, pat = resolved.lr_stage1, resolved.lr_stage2, resolved.patience
             mel_threshold, bcc_threshold = resolved.mel_threshold, resolved.bcc_threshold
             balanced_sampling, logit_adjust = resolved.balanced_sampling, resolved.logit_adjust
             mixup_alpha, use_tta = resolved.mixup_alpha, resolved.use_tta
             color_constancy = resolved.color_constancy
 
             exp_id = f"{s_key}_{model_name}_ep{epochs}_bs{bs}_lr2_{lr2}_pat{pat}_seed{seed}"
-            exp_dir = session_dir / 'scenarios' / s_key / model_name
+            exp_dir = session_dir / 'scenarios' / s_key / model_name / f"seed{seed}"
             exp_dir.mkdir(parents=True, exist_ok=True)
 
-            print(f"[{m_idx}/{len(target_models)}] Scenario: {s_key.upper()} | Model: {model_name.upper()}")
+            print(f"[{m_idx}/{len(jobs)}] Scenario: {s_key.upper()} | Model: {model_name.upper()} | Seed: {seed}")
 
             # ── 1. Fault Tolerance: Check if Completed ──
             if is_experiment_completed(exp_dir):
@@ -267,6 +293,10 @@ def main():
                 'lr_stage2': lr2,
                 'patience': pat,
                 'seed': seed,
+                'split_seed': resolved.split_seed,
+                'loss': resolved.loss,
+                'temperature_scaling': resolved.temperature_scaling,
+                'git_sha': git_sha,
                 'mel_threshold': mel_threshold,
                 'bcc_threshold': bcc_threshold,
                 'malignant_threshold': resolved.malignant_threshold,
@@ -309,6 +339,10 @@ def main():
             cmd.extend(['--stage1-epochs', str(resolved.stage1_epochs)])
             cmd.extend(['--eval-precision', resolved.eval_precision])
             cmd.extend(['--selection-min-delta', str(resolved.selection_min_delta)])
+            cmd.extend(['--split-seed', str(resolved.split_seed)])
+            cmd.extend(['--loss', resolved.loss])
+            if not resolved.temperature_scaling:
+                cmd.append('--no-temperature-scaling')
             if resolved.img_size is not None:
                 cmd.extend(['--img-size', str(resolved.img_size)])
             if resolved.malignant_threshold is not None:
@@ -397,6 +431,9 @@ def main():
                         'lr_stage2': lr2,
                         'patience': pat,
                         'seed': seed,
+                        'loss': resolved.loss,
+                        'temperature': res_data.get('temperature'),
+                        'selected_logit_adjust': res_data.get('selected_logit_adjust'),
                         'val_dataset': 'dual (HAM10000 + PAD-UFES-20)',
 
                         # In-Domain (HAM10000)

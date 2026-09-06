@@ -1,174 +1,170 @@
 {
   "scenarios": {
-    "standard": {
-      "name": "Standard (20 Epochs Production)",
-      "description": "Production benchmark with model-specific budgets, fixed-sensitivity calibration, and consistent AMP evaluation.",
+    "main": {
+      "name": "Main (per-model budget, 3 seeds for v1-v4)",
+      "description": "Single training budget per architecture. v1-v4 run with seeds 42/43/44 on a fixed split (split_seed 42); v5 runs once. Replaces the low/medium/standard axis, which only changed the selected epoch.",
       "priority": 1,
       "optional": false,
+      "split_seed": 42,
       "mel_threshold": "sens90",
       "bcc_threshold": "sens90",
       "malignant_threshold": "sens90",
       "eval_precision": "amp",
       "selection_min_delta": 0.0005,
       "balanced_sampling": true,
+      "loss": "focal",
       "logit_adjust": 0.0,
       "mixup_alpha": 0.2,
       "use_tta": true,
+      "temperature_scaling": true,
+      "color_constancy": false,
       "models": {
-        "v1": {
-          "epochs": 20,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 4,
-          "seed": 42
-        },
-        "v2": {
-          "epochs": 20,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 4,
-          "seed": 42
-        },
-        "v3": {
-          "epochs": 20,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 4,
-          "seed": 42
-        },
-        "v4": {
-          "epochs": 30,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.00002,
-          "patience": 6,
-          "seed": 42
-        },
-        "v5": {
-          "epochs": 40,
-          "batch_size": 32,
-          "lr_stage1": 0.0005,
-          "lr_stage2": 0.00003,
-          "patience": 6,
-          "seed": 42
-        }
+        "v1": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42, 43, 44]},
+        "v2": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42, 43, 44]},
+        "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42, 43, 44]},
+        "v4": {"epochs": 45, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00003, "patience": 8, "seeds": [42, 43, 44]},
+        "v5": {"epochs": 40, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00003, "patience": 6, "seeds": [42]}
+      }
+    },
+    "ablation_no_sampler": {
+      "name": "Ablation: class-weighted focal instead of balanced sampler (v3)",
+      "description": "Same budget as main/v3/seed42. balanced_sampling=false switches the imbalance handling from the 1/sqrt(n) sampler to class-weighted focal alpha.",
+      "priority": 2,
+      "optional": false,
+      "split_seed": 42,
+      "mel_threshold": "sens90",
+      "bcc_threshold": "sens90",
+      "malignant_threshold": "sens90",
+      "eval_precision": "amp",
+      "selection_min_delta": 0.0005,
+      "balanced_sampling": false,
+      "loss": "focal",
+      "logit_adjust": 0.0,
+      "mixup_alpha": 0.2,
+      "use_tta": true,
+      "temperature_scaling": true,
+      "color_constancy": false,
+      "models": {
+        "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42]}
+      }
+    },
+    "ablation_no_focal": {
+      "name": "Ablation: cross-entropy instead of focal loss (v3)",
+      "description": "Same budget as main/v3/seed42 with loss=ce (same alpha weighting rule, gamma removed).",
+      "priority": 3,
+      "optional": false,
+      "split_seed": 42,
+      "mel_threshold": "sens90",
+      "bcc_threshold": "sens90",
+      "malignant_threshold": "sens90",
+      "eval_precision": "amp",
+      "selection_min_delta": 0.0005,
+      "balanced_sampling": true,
+      "loss": "ce",
+      "logit_adjust": 0.0,
+      "mixup_alpha": 0.2,
+      "use_tta": true,
+      "temperature_scaling": true,
+      "color_constancy": false,
+      "models": {
+        "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42]}
+      }
+    },
+    "ablation_no_mixup": {
+      "name": "Ablation: no mixup (v3)",
+      "description": "Same budget as main/v3/seed42 with mixup_alpha=0.",
+      "priority": 4,
+      "optional": false,
+      "split_seed": 42,
+      "mel_threshold": "sens90",
+      "bcc_threshold": "sens90",
+      "malignant_threshold": "sens90",
+      "eval_precision": "amp",
+      "selection_min_delta": 0.0005,
+      "balanced_sampling": true,
+      "loss": "focal",
+      "logit_adjust": 0.0,
+      "mixup_alpha": 0.0,
+      "use_tta": true,
+      "temperature_scaling": true,
+      "color_constancy": false,
+      "models": {
+        "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seeds": [42]}
+      }
+    },
+    "standard": {
+      "name": "Legacy: Standard (20 Epochs Production)",
+      "description": "Kept for reproducing sessions up to 05_09_2026. Superseded by 'main'.",
+      "priority": 10,
+      "optional": true,
+      "split_seed": 42,
+      "mel_threshold": "sens90",
+      "bcc_threshold": "sens90",
+      "malignant_threshold": "sens90",
+      "eval_precision": "amp",
+      "selection_min_delta": 0.0005,
+      "balanced_sampling": true,
+      "loss": "focal",
+      "logit_adjust": 0.0,
+      "mixup_alpha": 0.2,
+      "use_tta": true,
+      "temperature_scaling": false,
+      "models": {
+        "v1": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
+        "v2": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
+        "v3": {"epochs": 20, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 4, "seed": 42},
+        "v4": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00002, "patience": 6, "seed": 42},
+        "v5": {"epochs": 40, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00003, "patience": 6, "seed": 42}
       }
     },
     "medium": {
-      "name": "Medium (Balanced Research Budget)",
-      "description": "Balanced research budget with extended V5 convergence and stabilized V4 early stopping.",
-      "priority": 2,
-      "optional": false,
+      "name": "Legacy: Medium (Balanced Research Budget)",
+      "description": "Kept for reproducing sessions up to 05_09_2026. Superseded by 'main'.",
+      "priority": 11,
+      "optional": true,
+      "split_seed": 42,
       "mel_threshold": "sens90",
       "bcc_threshold": "sens90",
       "malignant_threshold": "sens90",
       "eval_precision": "amp",
       "selection_min_delta": 0.0005,
       "balanced_sampling": true,
+      "loss": "focal",
       "logit_adjust": 0.0,
       "mixup_alpha": 0.2,
       "use_tta": true,
+      "temperature_scaling": false,
       "models": {
-        "v1": {
-          "epochs": 30,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 5,
-          "seed": 42
-        },
-        "v2": {
-          "epochs": 30,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 5,
-          "seed": 42
-        },
-        "v3": {
-          "epochs": 30,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 5,
-          "seed": 42
-        },
-        "v4": {
-          "epochs": 30,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.00002,
-          "patience": 6,
-          "seed": 42
-        },
-        "v5": {
-          "epochs": 40,
-          "batch_size": 32,
-          "lr_stage1": 0.0005,
-          "lr_stage2": 0.00003,
-          "patience": 6,
-          "seed": 42
-        }
+        "v1": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
+        "v2": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
+        "v3": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 5, "seed": 42},
+        "v4": {"epochs": 30, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00002, "patience": 6, "seed": 42},
+        "v5": {"epochs": 40, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00003, "patience": 6, "seed": 42}
       }
     },
     "low": {
-      "name": "Low (Fast Exploration)",
-      "description": "15 Epochs, Patience 3, rapid baseline profiling for lightweight execution.",
-      "priority": 3,
-      "optional": false,
+      "name": "Legacy: Low (Fast Exploration)",
+      "description": "15 epochs, patience 3. Kept for smoke runs; superseded by 'main'.",
+      "priority": 12,
+      "optional": true,
+      "split_seed": 42,
       "mel_threshold": "sens90",
       "bcc_threshold": "sens90",
       "malignant_threshold": "sens90",
       "eval_precision": "amp",
       "selection_min_delta": 0.0005,
       "balanced_sampling": true,
+      "loss": "focal",
       "logit_adjust": 0.0,
       "mixup_alpha": 0.2,
       "use_tta": true,
+      "temperature_scaling": true,
       "models": {
-        "v1": {
-          "epochs": 15,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 3,
-          "seed": 42
-        },
-        "v2": {
-          "epochs": 15,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 3,
-          "seed": 42
-        },
-        "v3": {
-          "epochs": 15,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.0001,
-          "patience": 3,
-          "seed": 42
-        },
-        "v4": {
-          "epochs": 15,
-          "batch_size": 32,
-          "lr_stage1": 0.001,
-          "lr_stage2": 0.00005,
-          "patience": 3,
-          "seed": 42
-        },
-        "v5": {
-          "epochs": 15,
-          "batch_size": 32,
-          "lr_stage1": 0.0005,
-          "lr_stage2": 0.00002,
-          "patience": 3,
-          "seed": 42
-        }
+        "v1": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
+        "v2": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
+        "v3": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.0001, "patience": 3, "seed": 42},
+        "v4": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.001, "lr_stage2": 0.00003, "patience": 3, "seed": 42},
+        "v5": {"epochs": 15, "batch_size": 32, "lr_stage1": 0.0005, "lr_stage2": 0.00002, "patience": 3, "seed": 42}
       }
     }
   }

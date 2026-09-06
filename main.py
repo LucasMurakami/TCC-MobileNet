@@ -53,6 +53,19 @@ class RunConfig:
     eval_precision: str
     selection_min_delta: float
     no_cudnn: bool
+    loss: str = 'focal'
+    temperature_scaling: bool = True
+    split_seed: int = 42
+
+
+def resolve_seeds(scenario_cfg: dict, model_cfg: dict, cli_seed=None) -> list:
+    """Training seeds for one model: CLI override > model 'seeds' list > model/scenario 'seed' > 42."""
+    if cli_seed is not None:
+        return [int(cli_seed)]
+    seeds = model_cfg.get('seeds')
+    if seeds:
+        return [int(s) for s in seeds]
+    return [int(model_cfg.get('seed', scenario_cfg.get('seed', 42)))]
 
 
 def resolve_run_config(args, scenario_cfg: dict, model_cfg: dict) -> RunConfig:
@@ -84,6 +97,9 @@ def resolve_run_config(args, scenario_cfg: dict, model_cfg: dict) -> RunConfig:
         eval_precision=str(value('eval_precision', 'fp32')),
         selection_min_delta=max(0.0, float(value('selection_min_delta', 0.0005))),
         no_cudnn=bool(getattr(args, 'no_cudnn', False)),
+        loss=str(value('loss', 'focal')).lower(),
+        temperature_scaling=not bool(getattr(args, 'no_temperature_scaling', False)) and bool(model_cfg.get('temperature_scaling', scenario_cfg.get('temperature_scaling', True))),
+        split_seed=int(value('split_seed', 42)),
     )
 
 
@@ -230,17 +246,29 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
             ham_decisions = decision_domains.get('ham10000', {})
             pad_decisions = decision_domains.get('pad_ufes_20', {})
 
-            # Determine scenario and model name from path
+            # Determine scenario, model and seed from path:
+            #   scenarios/<scenario>/<model>/results.json            (legacy, single seed)
+            #   scenarios/<scenario>/<model>/seed<N>/results.json    (multi-seed)
             rel_parts = rf.relative_to(session_dir).parts
+            seed_value = data.get('seed')
             if len(rel_parts) >= 3 and rel_parts[0] == 'scenarios':
                 scenario_name = rel_parts[1]
                 model_name = rel_parts[2]
+                if len(rel_parts) >= 5 and rel_parts[3].startswith('seed'):
+                    seed_value = int(rel_parts[3][4:])
             elif len(rel_parts) >= 2:
                 scenario_name = 'standard'
                 model_name = rel_parts[0]
             else:
                 scenario_name = 'standard'
                 model_name = data.get('model', 'unknown')
+            if seed_value is None:
+                config_file = rf.parent / 'config.json'
+                if config_file.exists():
+                    with open(config_file, 'r') as f:
+                        seed_value = json.load(f).get('config', {}).get('seed', 42)
+                else:
+                    seed_value = 42
 
             ham_acc = float(data.get('ham_accuracy', 0.0))
             pad_acc = float(data.get('pad_accuracy', 0.0))
@@ -249,6 +277,7 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
             records.append({
                 'scenario': scenario_name,
                 'model': model_name,
+                'seed': int(seed_value),
                 'ham_accuracy': round(ham_acc, 4),
                 'pad_restricted_5class_acc': round(float(data.get('pad_restricted_5class_acc', 0.0)), 4),
                 'pad_macro_auc_roc': round(float(data.get('pad_macro_auc_roc', 0.0)), 4),
@@ -288,8 +317,16 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
                 'pad_mal_screen_sens': round(float(data.get('pad_malignant_triage_recall', 0.0)), 4) if data.get('pad_malignant_triage_recall') is not None else None,
                 'ham_weighted_f1': round(float(data.get('ham_weighted_f1', 0.0)), 4),
                 'weighted_avg_f1': round(float(data.get('pad_weighted_f1', 0.0)), 4),
+                'params_m': round(float(data.get('params', 0)) / 1e6, 1),
+                'temperature': data.get('temperature'),
+                'ham_ece': round(float(data.get('ham_expected_calibration_error', 0.0)), 4),
+                'pad_ece': round(float(data.get('pad_expected_calibration_error', 0.0)), 4),
+                'loss': data.get('loss', 'focal'),
             })
-            all_results_dict[f"{scenario_name}_{model_name}" if len(results_files) > 5 else model_name] = data
+            run_key = f"{scenario_name}_{model_name}" if len(results_files) > 5 else model_name
+            if len(rel_parts) >= 5 and rel_parts[3].startswith('seed'):
+                run_key = f"{run_key}_{rel_parts[3]}"
+            all_results_dict[run_key] = data
         except Exception as e:
             print(f"Warning: could not parse {rf}: {e}")
 
@@ -303,38 +340,76 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if not df.empty:
         df = df.sort_values(by=['mel_auc_roc', 'ham_mel_auc_roc'], ascending=[False, False])
+        duplicate_of = {}
+        first_seen = {}
+        for _, row in df.iterrows():
+            key = row['checkpoint_sha256']
+            label = f"{row['scenario']}/{row['model']}/seed{row['seed']}"
+            if key and key in first_seen:
+                duplicate_of[label] = first_seen[key]
+            elif key:
+                first_seen[key] = label
+        df['run'] = df.apply(lambda r: f"{r['scenario']}/{r['model']}/seed{r['seed']}", axis=1)
+        df['duplicate_of'] = df['run'].map(duplicate_of)
         df.to_csv(session_dir / 'master_leaderboard.csv', index=False)
 
-        # Markdown Leaderboard Table
-        header = '| ' + ' | '.join(df.columns) + ' |\n| ' + ' | '.join([':---' for _ in df.columns]) + ' |\n'
-        rows = '\n'.join(['| ' + ' | '.join(str(val) for val in row) + ' |' for row in df.values])
-        table_md = header + rows
-        consistency_columns = ['scenario', 'model', 'selected_epoch', 'selected_loop_acc', 'final_ham_val_acc', 'eval_acc_delta', 'eval_warning']
-        consistency_df = df[consistency_columns]
-        consistency_header = '| ' + ' | '.join(consistency_columns) + ' |\n| ' + ' | '.join([':---' for _ in consistency_columns]) + ' |\n'
-        consistency_rows = '\n'.join(['| ' + ' | '.join(str(value) for value in row) + ' |' for row in consistency_df.values])
-        consistency_md = consistency_header + consistency_rows
-        decision_columns = ['scenario', 'model', 'ham_bacc', 'ham_bacc_tau', 'pad_bacc', 'pad_bacc_tau', 'tau_star', 'tau_source', 'ham_mal_sens_gated', 'pad_mal_sens_gated']
-        decision_df = df[decision_columns]
-        decision_header = '| ' + ' | '.join(decision_columns) + ' |\n| ' + ' | '.join([':---' for _ in decision_columns]) + ' |\n'
-        decision_rows = '\n'.join(['| ' + ' | '.join(str(value) for value in row) + ' |' for row in decision_df.values])
-        decision_md = decision_header + decision_rows
+        def md_table(frame: pd.DataFrame) -> str:
+            header = '| ' + ' | '.join(frame.columns) + ' |\n| ' + ' | '.join([':---' for _ in frame.columns]) + ' |\n'
+            return header + '\n'.join(['| ' + ' | '.join(str(val) for val in row) + ' |' for row in frame.values])
+
+        # 1. Unique checkpoints: one row per distinct model, scenarios that produced it listed together.
+        unique_df = df[df['duplicate_of'].isna()].copy()
+        scenario_lists = df.groupby('checkpoint_sha256')['scenario'].agg(lambda s: ', '.join(sorted(set(s))))
+        unique_df['scenarios'] = unique_df['checkpoint_sha256'].map(scenario_lists)
+        headline_columns = ['model', 'seed', 'scenarios', 'params_m', 'ham_mel_auc_roc', 'ham_bacc', 'ham_bacc_tau', 'mel_auc_roc', 'pad_macro_auc_roc',
+                            'pad_mal_sens_gated', 'ham_ece', 'pad_ece', 'temperature', 'tau_star', 'selected_epoch']
+        unique_md = md_table(unique_df[headline_columns])
+
+        # 2. Per-model aggregate over seeds (mean ± std) — the numbers to quote.
+        agg_metrics = ['ham_mel_auc_roc', 'ham_bacc', 'ham_bacc_tau', 'mel_auc_roc', 'pad_macro_auc_roc', 'pad_mal_sens_gated', 'pad_ece']
+        agg_rows = []
+        for (scenario, model), group in unique_df.groupby(['scenario', 'model']):
+            row = {'scenario': scenario, 'model': model, 'n_seeds': int(group['seed'].nunique())}
+            for metric in agg_metrics:
+                values = group[metric].astype(float)
+                row[metric] = f"{values.mean():.4f} ± {values.std(ddof=0):.4f}" if len(values) > 1 else f"{values.mean():.4f}"
+            agg_rows.append(row)
+        aggregate_md = md_table(pd.DataFrame(agg_rows).sort_values(by=['scenario', 'model']))
+
+        decision_columns = ['run', 'ham_bacc', 'ham_bacc_tau', 'pad_bacc', 'pad_bacc_tau', 'tau_star', 'tau_source', 'ham_mal_sens_gated', 'pad_mal_sens_gated', 'duplicate_of']
+        decision_md = md_table(df[decision_columns])
+        consistency_columns = ['run', 'selected_epoch', 'selected_loop_acc', 'final_ham_val_acc', 'eval_acc_delta', 'eval_warning', 'temperature', 'ham_ece', 'pad_ece']
+        consistency_md = md_table(df[consistency_columns])
+        full_columns = [c for c in df.columns if c not in ('run', 'scenarios')]
+        table_md = md_table(df[full_columns])
 
         summary_md = f"""# 🏆 Skin Lesion Benchmark: Session Leaderboard ({session_dir.name})
 
 *Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*
 
-### 📊 Top Performing Hyperparameter Configurations (Dual-Domain)
+{len(df)} run(s), {len(unique_df)} unique checkpoint(s). Runs with identical `checkpoint_sha256` are listed once below and marked in `duplicate_of` further down.
+`ham_bacc_tau` = balanced accuracy with the HAM-val-selected prior correction τ*; `pad_mal_sens_gated` = PAD malignant sensitivity of the sens90-calibrated malignant gate.
+`params_m` is in millions — v5 is ~30× larger than v1–v4.
 
-{table_md}
+### Unique checkpoints (headline)
 
-### Decision-rule comparison
+{unique_md}
+
+### Per-model aggregate over seeds (mean ± std)
+
+{aggregate_md}
+
+### Decision-rule comparison (all runs)
 
 {decision_md}
 
-### Evaluation consistency
+### Evaluation consistency and calibration (all runs)
 
 {consistency_md}
+
+### All columns (all runs)
+
+{table_md}
 
 ---
 """
@@ -459,7 +534,10 @@ def parse_args():
     parser.add_argument('--color-constancy', action='store_true', default=False,
                         help="Enable Shades-of-Gray Minkowski color constancy transform to standardize cross-domain illumination.")
     parser.add_argument('--output-dir', type=str, default=None, help='Custom output directory (overrides auto-session)')
-    parser.add_argument('--seed', type=int, default=None, help='Random seed for reproducibility')
+    parser.add_argument('--seed', type=int, default=None, help='Training seed (weights init, sampler, augmentation). Independent of the data split.')
+    parser.add_argument('--split-seed', type=int, default=None, help='Seed of the lesion-grouped train/val/test split (default 42; must match a cached session split)')
+    parser.add_argument('--loss', choices=['focal', 'ce'], default=None, help='Training loss: focal (gamma=2) or plain cross-entropy; alpha/class weighting rule is shared')
+    parser.add_argument('--no-temperature-scaling', action='store_true', default=False, help='Skip fitting a HAM-val temperature before calibrating thresholds')
     return parser.parse_args()
 
 
@@ -484,8 +562,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    # Global Random Seed
-    base_seed = args.seed if args.seed is not None else 42
+    # Split seed (data partition) is independent of the training seed so multi-seed runs share one split.
+    scenario_cfg = scenarios.get(args.scenario, {})
+    base_seed = int(args.split_seed if args.split_seed is not None else scenario_cfg.get('split_seed', 42))
     np.random.seed(base_seed)
     torch.manual_seed(base_seed)
     if torch.cuda.is_available():
@@ -515,7 +594,7 @@ def main():
         with open(manifest_path, 'r') as f:
             cached_manifest = json.load(f)
         if int(cached_manifest['random_state']) != base_seed:
-            raise RuntimeError(f"Cached split seed {cached_manifest['random_state']} does not match requested seed {base_seed}")
+            raise RuntimeError(f"Cached split seed {cached_manifest['random_state']} does not match requested split seed {base_seed}")
         train_df = pd.read_csv(session_dir / 'train_df.csv')
         ham_val_df = pd.read_csv(session_dir / 'ham_val_df.csv')
         ham_test_df = pd.read_csv(session_dir / 'ham_test_df.csv')
@@ -573,24 +652,24 @@ def main():
             canonical_model = 'v3'
         models_to_train = [canonical_model]
 
-    scenario_cfg = scenarios.get(args.scenario, {})
     scenario_models_cfg = scenario_cfg.get('models', {})
 
     all_results = {}
     for m in models_to_train:
         m_cfg = scenario_models_cfg.get(m, {})
         resolved_cfg = resolve_run_config(args, scenario_cfg, m_cfg)
-        if resolved_cfg.seed != base_seed:
-            raise RuntimeError(f"Model seed {resolved_cfg.seed} does not match split seed {base_seed}")
+        if resolved_cfg.split_seed != base_seed:
+            raise RuntimeError(f"Resolved split seed {resolved_cfg.split_seed} does not match session split seed {base_seed}")
         model_args = argparse.Namespace(**asdict(resolved_cfg))
 
         write_provenance(output_dir / m / 'config.json', resolved_cfg, hw, split_manifest)
 
         print(f"\n⚙️  Configuring {m.upper()} from scenario '{args.scenario}': "
               f"epochs={model_args.epochs}, patience={model_args.patience}, batch_size={model_args.batch_size}, "
-              f"lr1={model_args.lr_stage1}, lr2={model_args.lr_stage2}, mel_th={model_args.mel_threshold}, bcc_th={model_args.bcc_threshold}, "
+              f"lr1={model_args.lr_stage1}, lr2={model_args.lr_stage2}, seed={model_args.seed}, split_seed={model_args.split_seed}, "
+              f"mel_th={model_args.mel_threshold}, bcc_th={model_args.bcc_threshold}, loss={model_args.loss}, "
               f"balanced_sampling={model_args.balanced_sampling}, logit_adjust={model_args.logit_adjust}, mixup={model_args.mixup_alpha}, "
-              f"tta={model_args.use_tta}, color_constancy={model_args.color_constancy}")
+              f"tta={model_args.use_tta}, temperature_scaling={model_args.temperature_scaling}, color_constancy={model_args.color_constancy}")
 
         result = train_single_model(
             m, model_args, output_dir, hw, train_df, ham_val_df, ham_test_df, pad_val_df

@@ -40,7 +40,7 @@ from sklearn.metrics import classification_report, confusion_matrix, roc_auc_sco
 from dataset import CLASS_NAMES, NUM_CLASSES
 from metrics import (
     _evaluate_binary_triage, bootstrap_metric_ci, confusion_summary, decide_argmax,
-    decide_malignant_gated, decide_prior_corrected, expected_calibration_error,
+    decide_malignant_gated, decide_prior_corrected, expected_calibration_error, fit_temperature,
     meets_auc_target, restricted_class_accuracy, select_logit_adjust,
 )
 from visualize import (
@@ -363,7 +363,8 @@ def evaluate_dataset(
     logit_adjust=0.0,
     class_priors=None,
     use_tta=False,
-    autocast=True
+    autocast=True,
+    temperature=1.0,
 ):
     """Runs a complete evaluation pass on a dataset loader with optional Logit Adjustment,
     Triage Thresholding, and Test-Time Augmentation (TTA).
@@ -376,8 +377,12 @@ def evaluate_dataset(
         logit_adjust: Strength of post-hoc Bayesian prior correction (0.0 to 1.0).
         class_priors: Training set prior distribution array for Logit Adjustment.
         use_tta: If True, averages probabilities over original, horizontal-flip, and vertical-flip views.
+        temperature: Scalar temperature applied to logits before softmax (1.0 = raw model output).
     """
     model.eval()
+    temperature = float(temperature)
+    if not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError("temperature must be a positive finite value")
     all_preds, all_targets, all_probs, all_logits = [], [], [], []
     v_loss, v_corr, v_tot = 0.0, 0, 0
     if criterion is None:
@@ -398,13 +403,14 @@ def evaluate_dataset(
                     outputs.append(model(view))
                 loss = criterion(torch.stack(outputs).mean(dim=0), y)
 
-            float_outputs = [output.float() for output in outputs]
+            raw_outputs = [output.float() for output in outputs]
+            float_outputs = [output / temperature for output in raw_outputs]
             probs = torch.stack([torch.softmax(output, dim=1) for output in float_outputs]).mean(dim=0)
             decision_outputs = [output - float(logit_adjust) * log_priors for output in float_outputs] if log_priors is not None else float_outputs
             decision_probs = torch.stack([torch.softmax(output, dim=1) for output in decision_outputs]).mean(dim=0)
             preds = decision_probs.argmax(dim=1)
             all_probs.extend(probs.cpu().numpy())
-            all_logits.extend(torch.stack(float_outputs).mean(dim=0).cpu().numpy())
+            all_logits.extend(torch.stack(raw_outputs).mean(dim=0).cpu().numpy())
             all_preds.extend(preds.cpu().numpy())
             all_targets.extend(y.cpu().numpy())
             v_loss += loss.item() * len(y)
@@ -515,6 +521,7 @@ def evaluate_dataset(
         'all_targets': all_targets,
         'all_probs': all_probs,
         'all_logits': all_logits,
+        'temperature': temperature,
         'report': report
     }
 
@@ -753,7 +760,13 @@ def train_single_model(
     else:
         weights_dict = compute_class_weights(train_df['dx'])
         weight_tensor = torch.tensor([weights_dict[i] for i in range(NUM_CLASSES)], dtype=torch.float32).to(device)
-    criterion = PyTorchFocalLoss(alpha=weight_tensor, gamma=2.0)
+    loss_name = str(getattr(args, 'loss', 'focal') or 'focal').lower()
+    if loss_name not in ('focal', 'ce'):
+        raise ValueError(f"Unsupported loss '{loss_name}' (expected 'focal' or 'ce')")
+    # gamma=0 reduces focal loss to alpha-weighted cross-entropy, so both losses share the same weighting rule.
+    focal_gamma = 2.0 if loss_name == 'focal' else 0.0
+    criterion = PyTorchFocalLoss(alpha=weight_tensor, gamma=focal_gamma)
+    print(f"  Loss: {'Focal (gamma=2.0)' if loss_name == 'focal' else 'Cross-entropy (focal gamma=0)'} | alpha: {'neutral' if balanced_sampling else 'inverse-frequency'}")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Stage 1: Warmup Classifier Head (Backbone Frozen)
@@ -1007,11 +1020,24 @@ def train_single_model(
     bcc_th = getattr(args, 'bcc_threshold', 'youden')
     mal_th = getattr(args, 'malignant_threshold', None)
 
-    ham_val_results = evaluate_dataset(
+    # Pass 1 (T=1): raw HAM-val outputs. Used for the loop-consistency guard and to fit the temperature.
+    ham_val_raw = evaluate_dataset(
         model, ham_val_loader, device, precision_dtype, has_cuda,
         mel_threshold=mel_th, bcc_threshold=bcc_th, malignant_threshold=mal_th,
         **eval_kwargs
     )
+    use_temperature_scaling = bool(getattr(args, 'temperature_scaling', True))
+    temperature = fit_temperature(ham_val_raw['all_logits'], ham_val_raw['all_targets']) if use_temperature_scaling else 1.0
+    ham_val_ece_before_ts = ham_val_raw['expected_calibration_error']
+    eval_kwargs['temperature'] = temperature
+    print(f"  Temperature scaling: {'T=%.3f (fit on HAM-val NLL)' % temperature if use_temperature_scaling else 'disabled'}")
+
+    # Pass 2 (T fitted): every threshold, tau and downstream metric is calibrated on temperature-scaled probabilities.
+    ham_val_results = evaluate_dataset(
+        model, ham_val_loader, device, precision_dtype, has_cuda,
+        mel_threshold=mel_th, bcc_threshold=bcc_th, malignant_threshold=mal_th,
+        **eval_kwargs
+    ) if use_temperature_scaling else ham_val_raw
     selected_loop_accuracy = h2['val_accuracy'][selected_epoch - 1]
     ham_val_accuracy_delta, eval_consistency_warning = evaluation_accuracy_consistency(
         ham_val_results['accuracy'], selected_loop_accuracy
@@ -1125,6 +1151,12 @@ def train_single_model(
         'bcc_triage_threshold': calibrated_bcc_th,
         'malignant_triage_threshold': calibrated_mal_th,
         'balanced_sampling': balanced_sampling,
+        'loss': loss_name,
+        'temperature_scaling': use_temperature_scaling,
+        'temperature': float(temperature),
+        'temperature_source': 'ham_val_nll' if use_temperature_scaling else 'disabled',
+        'ham_val_ece_before_ts': float(ham_val_ece_before_ts),
+        'ham_val_ece_after_ts': float(ham_val_results['expected_calibration_error']),
         'logit_adjust': logit_adjust,
         'selected_logit_adjust': selected_tau,
         'logit_adjust_source': tau_source,
@@ -1261,6 +1293,7 @@ def train_single_model(
     print(f"     ↳ MEL Triage (tau={calibrated_th:.2f}): Mel Recall={ham_results['mel_triage_recall']:.2%} | Spec={ham_results['mel_triage_spec']:.2%}")
     print(f"     ↳ BCC Triage (tau={calibrated_bcc_th:.2f}): BCC Recall={ham_results['bcc_triage_recall']:.2%} | Spec={ham_results['bcc_triage_spec']:.2%}")
     print(f"     ↳ Malignancy Screen:    Recall={ham_results['malignant_triage_recall']:.2%} | Spec={ham_results['malignant_triage_spec']:.2%}")
+    print(f"     ↳ Calibration:          T={temperature:.3f} | HAM-val ECE {ham_val_ece_before_ts:.4f} -> {ham_val_results['expected_calibration_error']:.4f} | tau*={selected_tau:.1f} ({tau_source}) | BAcc argmax={ham_decision_metrics['argmax']['balanced_accuracy']:.2%} tau={ham_decision_metrics['prior_corrected']['balanced_accuracy']:.2%}")
     print(f"   Out-of-Domain (PAD-UFES): Acc={pad_results['accuracy']:.2%} | Macro AUC={pad_results['macro_auc_roc']:.4f} | Mel AUC={pad_results['mel_auc_roc']:.4f}")
     print(f"     ↳ Argmax:               Mel Recall={pad_results['mel_recall']:.2%} | BCC Recall={pad_results['bcc_recall']:.2%}")
     print(f"     ↳ MEL Triage (tau={calibrated_th:.2f}): Mel Recall={pad_results['mel_triage_recall']:.2%} | Spec={pad_results['mel_triage_spec']:.2%} | Detected={pad_results['mel_triage_detected']}")

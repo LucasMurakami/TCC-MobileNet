@@ -214,10 +214,12 @@ def main():
     for m in args.models:
         candidate_paths = [
             session_dir / m / 'best_model.pth',
+            session_dir / 'scenarios' / 'main' / m / 'seed42' / 'best_model.pth',
             session_dir / 'scenarios' / 'standard' / m / 'best_model.pth',
             session_dir / 'scenarios' / 'medium' / m / 'best_model.pth',
             session_dir / 'scenarios' / 'low' / m / 'best_model.pth',
         ]
+        candidate_paths.extend(sorted((session_dir / 'scenarios').glob(f'*/{m}/seed*/best_model.pth')) if (session_dir / 'scenarios').exists() else [])
         found = next((p for p in candidate_paths if p.exists()), None)
         if found:
             print(f"  📦 Loading checkpoint for {m.upper()} from {found}")

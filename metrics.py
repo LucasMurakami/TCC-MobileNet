@@ -302,6 +302,55 @@ def confusion_summary(targets, predictions, class_names: Sequence[str], malignan
     }
 
 
+def softmax_with_temperature(logits, temperature: float = 1.0) -> np.ndarray:
+    logits_array = np.asarray(logits, dtype=float)
+    if logits_array.ndim != 2:
+        raise ValueError("logits must be a two-dimensional array")
+    if not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError("temperature must be a positive finite value")
+    scaled = logits_array / float(temperature)
+    scaled = scaled - scaled.max(axis=1, keepdims=True)
+    exp = np.exp(scaled)
+    return exp / exp.sum(axis=1, keepdims=True)
+
+
+def negative_log_likelihood(logits, targets, temperature: float = 1.0) -> float:
+    probs = softmax_with_temperature(logits, temperature)
+    targets_array = np.asarray(targets, dtype=int)
+    if targets_array.ndim != 1 or len(targets_array) != len(probs):
+        raise ValueError("targets must be one-dimensional and match logits")
+    picked = np.clip(probs[np.arange(len(probs)), targets_array], 1e-12, None)
+    return float(-np.mean(np.log(picked)))
+
+
+def fit_temperature(logits, targets, t_min: float = 0.5, t_max: float = 5.0, iterations: int = 60) -> float:
+    """Single-scalar temperature minimising NLL on a held-out set (Guo et al. 2017), golden-section search over log T."""
+    logits_array = np.asarray(logits, dtype=float)
+    targets_array = np.asarray(targets, dtype=int)
+    if logits_array.ndim != 2 or len(logits_array) == 0:
+        raise ValueError("logits must be a non-empty two-dimensional array")
+    if targets_array.ndim != 1 or len(targets_array) != len(logits_array):
+        raise ValueError("targets must be one-dimensional and match logits")
+    if not (0 < t_min < t_max):
+        raise ValueError("require 0 < t_min < t_max")
+    lo, hi = np.log(t_min), np.log(t_max)
+    ratio = (np.sqrt(5.0) - 1.0) / 2.0
+    x1 = hi - ratio * (hi - lo)
+    x2 = lo + ratio * (hi - lo)
+    f1 = negative_log_likelihood(logits_array, targets_array, float(np.exp(x1)))
+    f2 = negative_log_likelihood(logits_array, targets_array, float(np.exp(x2)))
+    for _ in range(iterations):
+        if f1 < f2:
+            hi, x2, f2 = x2, x1, f1
+            x1 = hi - ratio * (hi - lo)
+            f1 = negative_log_likelihood(logits_array, targets_array, float(np.exp(x1)))
+        else:
+            lo, x1, f1 = x1, x2, f2
+            x2 = lo + ratio * (hi - lo)
+            f2 = negative_log_likelihood(logits_array, targets_array, float(np.exp(x2)))
+    return float(np.exp((lo + hi) / 2.0))
+
+
 def expected_calibration_error(probs, targets, n_bins: int = 15) -> float:
     probs_array = np.asarray(probs, dtype=float)
     targets_array = np.asarray(targets)

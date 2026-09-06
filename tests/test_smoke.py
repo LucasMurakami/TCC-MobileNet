@@ -45,6 +45,24 @@ def test_logit_adjust_changes_decisions_not_probabilities():
     assert adjusted['all_logits'].shape == (2, 7)
 
 
+def test_temperature_scales_probabilities_but_keeps_logits_and_argmax():
+    class FixedModel(torch.nn.Module):
+        def forward(self, inputs):
+            return torch.tensor([[3.0, 1.0, 0, 0, 0, 0, 0]], dtype=inputs.dtype).repeat(len(inputs), 1)
+
+    inputs = torch.zeros(2, 3, 2, 2)
+    loader = DataLoader(TensorDataset(inputs, torch.zeros(2, dtype=torch.long)), batch_size=2)
+    base = evaluate_dataset(FixedModel(), loader, torch.device('cpu'), torch.float32, False)
+    scaled = evaluate_dataset(FixedModel(), loader, torch.device('cpu'), torch.float32, False, temperature=2.0)
+    torch.testing.assert_close(torch.tensor(base['all_logits']), torch.tensor(scaled['all_logits']))
+    assert scaled['all_probs'][0, 0] < base['all_probs'][0, 0]
+    assert scaled['all_probs'][0, 0] == pytest.approx(torch.softmax(torch.tensor([1.5, 0.5, 0, 0, 0, 0, 0]), 0)[0].item(), abs=1e-6)
+    assert scaled['all_preds'][0] == base['all_preds'][0] == 0
+    assert scaled['temperature'] == 2.0
+    with pytest.raises(ValueError):
+        evaluate_dataset(FixedModel(), loader, torch.device('cpu'), torch.float32, False, temperature=0.0)
+
+
 def test_evaluation_accuracy_consistency_guard():
     small_delta, small_warning = evaluation_accuracy_consistency(0.81, 0.80)
     assert small_delta == pytest.approx(0.01)

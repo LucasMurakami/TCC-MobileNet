@@ -104,8 +104,12 @@ def main():
         print(f"  Found {len(checkpoint_paths)} checkpoint(s) to process.")
 
         for idx, cp_path in enumerate(checkpoint_paths, start=1):
-            model_name = cp_path.parent.name
-            scenario_name = cp_path.parent.parent.name
+            # scenarios/<scenario>/<model>/best_model.pth  or  scenarios/<scenario>/<model>/seed<N>/best_model.pth
+            model_parent = cp_path.parent
+            if model_parent.name.startswith('seed') and model_parent.name[4:].isdigit():
+                model_parent = model_parent.parent
+            model_name = model_parent.name
+            scenario_name = model_parent.parent.name
 
             # Canonicalize aliases
             canonical_name = model_name
