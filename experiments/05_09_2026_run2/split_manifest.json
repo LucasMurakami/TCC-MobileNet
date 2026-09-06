@@ -1,0 +1,100 @@
+{
+  "class_counts": {
+    "test": {
+      "akiec": 62,
+      "bcc": 100,
+      "bkl": 218,
+      "df": 28,
+      "mel": 218,
+      "nv": 1337,
+      "vasc": 32
+    },
+    "train": {
+      "akiec": 232,
+      "bcc": 363,
+      "bkl": 762,
+      "df": 77,
+      "mel": 792,
+      "nv": 4688,
+      "vasc": 98
+    },
+    "val": {
+      "akiec": 33,
+      "bcc": 51,
+      "bkl": 119,
+      "df": 10,
+      "mel": 103,
+      "nv": 680,
+      "vasc": 12
+    }
+  },
+  "group_counts": {
+    "test": 1494,
+    "train": 5229,
+    "val": 747
+  },
+  "group_overlap": {
+    "train_test": 0,
+    "train_val": 0,
+    "val_test": 0
+  },
+  "image_ids_sha256": {
+    "all": "91c47ecbe509fb3386c25d27d5685ad62fe08711b8fc90b50d3435f3d605f097",
+    "test": "a219dbd06a9019d19852a5afe5bfadad49ae327e51abcc78c0140f370af014cf",
+    "train": "6c6c485e855cfa4b77dd5a1caac9f5f66781ad5c02c97b35d2cee6e01b4c95dd",
+    "val": "a4dfe1a1a26d4a93f1200e6f9cbf2915eae7a893d21a152384da788144da1320"
+  },
+  "partitions": {
+    "test": {
+      "class_counts": {
+        "akiec": 62,
+        "bcc": 100,
+        "bkl": 218,
+        "df": 28,
+        "mel": 218,
+        "nv": 1337,
+        "vasc": 32
+      },
+      "groups": 1494,
+      "image_ids_sha256": "a219dbd06a9019d19852a5afe5bfadad49ae327e51abcc78c0140f370af014cf",
+      "samples": 1995
+    },
+    "train": {
+      "class_counts": {
+        "akiec": 232,
+        "bcc": 363,
+        "bkl": 762,
+        "df": 77,
+        "mel": 792,
+        "nv": 4688,
+        "vasc": 98
+      },
+      "groups": 5229,
+      "image_ids_sha256": "6c6c485e855cfa4b77dd5a1caac9f5f66781ad5c02c97b35d2cee6e01b4c95dd",
+      "samples": 7012
+    },
+    "val": {
+      "class_counts": {
+        "akiec": 33,
+        "bcc": 51,
+        "bkl": 119,
+        "df": 10,
+        "mel": 103,
+        "nv": 680,
+        "vasc": 12
+      },
+      "groups": 747,
+      "image_ids_sha256": "a4dfe1a1a26d4a93f1200e6f9cbf2915eae7a893d21a152384da788144da1320",
+      "samples": 1008
+    }
+  },
+  "random_state": 42,
+  "seed": 42,
+  "split_sizes": {
+    "test": 1995,
+    "train": 7012,
+    "val": 1008
+  },
+  "test_size": 0.2,
+  "val_size": 0.1
+}
