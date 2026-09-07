@@ -9,6 +9,7 @@ Includes:
 """
 
 import os
+import re
 import traceback
 from pathlib import Path
 from typing import List, Optional, Union, Dict, Any
@@ -717,55 +718,163 @@ def generate_gradcam_gallery(
 
 # ─── 5. Multi-Model Benchmark Comparison ──────────────────────────────────────
 
+def _clean_benchmark_model_name(raw_name: str) -> str:
+    """Format model identifiers into clean, human-readable labels."""
+    name = str(raw_name).strip()
+    lower = name.lower()
+    
+    # Check for ablation patterns
+    if 'ablation' in lower:
+        m = re.search(r'ablation_no_([a-z]+)_v(\d+)_seed(\d+)', lower)
+        if m:
+            comp, ver, seed = m.groups()
+            return f"Abl. No {comp.capitalize()} (V{ver}, s{seed})"
+        m = re.search(r'ablation_no_([a-z]+)', lower)
+        if m:
+            return f"Abl. No {m.group(1).capitalize()}"
+        return name.replace('_', ' ').title()
+    
+    # Check for main V{X} seed{Y}
+    m = re.search(r'(?:main_)?v(\d+)(?:_seed(\d+))?', lower)
+    if m:
+        ver, seed = m.groups()
+        if seed:
+            return f"MobileNet V{ver} (s{seed})"
+        return f"MobileNet V{ver}"
+        
+    if 'standard_backups' in lower or 'backups' in lower:
+        return "Standard (Backup)"
+        
+    return name.replace('_', ' ').title()
+
+
+def _benchmark_sort_key(name: str):
+    """Sort models logically: Main architectures V1->V5 by seed, then Ablations, then Backups/Others."""
+    lower = str(name).lower()
+    if ('main' in lower or any(f'v{i}' in lower for i in range(1, 6))) and 'ablation' not in lower and 'backup' not in lower:
+        v = 99
+        for i in [1, 2, 3, 4, 5]:
+            if f'v{i}' in lower:
+                v = i
+                break
+        sm = re.search(r'seed(\d+)', lower)
+        seed = int(sm.group(1)) if sm else 0
+        return (0, v, seed, name)
+    elif 'ablation' in lower:
+        return (1, 0, 0, name)
+    elif 'backup' in lower:
+        return (2, 0, 0, name)
+    return (3, 0, 0, name)
+
+
 def plot_benchmark_summary(
     results: Dict[str, Dict[str, Any]],
     output_path: Optional[Union[str, Path]] = None
 ) -> plt.Figure:
-    """Generate a multi-model comparative bar chart across all evaluated architectures."""
-    model_names = list(results.keys())
-    accuracies = [results[m].get('pad_accuracy', results[m].get('accuracy', 0.0)) for m in model_names]
-    f1_scores = [results[m].get('pad_mel_auc_roc', results[m].get('mel_auc_roc', 0.0)) for m in model_names]
-    macro_f1s = [results[m].get('pad_macro_auc_roc', results[m].get('macro_auc_roc', 0.0)) for m in model_names]
-
-    x = np.arange(len(model_names))
+    """Generate a highly legible, publication-quality comparative bar chart across all evaluated architectures."""
+    raw_names = list(results.keys())
+    sorted_names = sorted(raw_names, key=_benchmark_sort_key)
+    
+    accuracies = [results[m].get('pad_accuracy', results[m].get('accuracy', 0.0)) or 0.0 for m in sorted_names]
+    f1_scores = [results[m].get('pad_mel_auc_roc', results[m].get('mel_auc_roc', 0.0)) or 0.0 for m in sorted_names]
+    macro_f1s = [results[m].get('pad_macro_auc_roc', results[m].get('macro_auc_roc', 0.0)) or 0.0 for m in sorted_names]
+    
+    clean_labels = [_clean_benchmark_model_name(m) for m in sorted_names]
+    
+    n_models = len(sorted_names)
+    x = np.arange(n_models)
     width = 0.26
-
-    fig, ax = plt.subplots(figsize=(14, 6))
-    fig.patch.set_facecolor('#fafafa')
-    ax.set_facecolor('#ffffff')
-
-    rects1 = ax.bar(x - width, accuracies, width, label='PAD Accuracy', color='#1f77b4', edgecolor='white')
-    rects2 = ax.bar(x, f1_scores, width, label='PAD Melanoma AUC', color='#ff7f0e', edgecolor='white')
-    rects3 = ax.bar(x + width, macro_f1s, width, label='PAD Macro AUC', color='#2ca02c', edgecolor='white')
-
-    ax.set_title("MobileNet V1–V5 Architecture Comparison", fontsize=14, fontweight='bold', pad=12)
-    ax.set_xlabel('Model Architecture', fontsize=11, labelpad=8)
-    ax.set_ylabel('Performance Score [0.0 - 1.0]', fontsize=11, labelpad=8)
+    
+    # Scaled figure dimensions for publication and LaTeX inclusion
+    fig_width = max(14.0, min(18.0, n_models * 0.75))
+    fig, ax = plt.subplots(figsize=(fig_width, 8.0))
+    fig.patch.set_facecolor('#ffffff')
+    ax.set_facecolor('#fafafa')
+    
+    # Publication-grade colors (colorblind-friendly, strong contrast)
+    c_acc = '#1f77b4'       # PAD Accuracy (Blue)
+    c_mel = '#d95f02'       # PAD Melanoma AUC (Deep Amber/Orange)
+    c_macro = '#2ca02c'     # PAD Macro AUC (Green)
+    
+    rects1 = ax.bar(x - width, accuracies, width, label='PAD Accuracy', color=c_acc, edgecolor='none', alpha=0.95, zorder=3)
+    rects2 = ax.bar(x, f1_scores, width, label='PAD Melanoma AUC', color=c_mel, edgecolor='none', alpha=0.95, zorder=3)
+    rects3 = ax.bar(x + width, macro_f1s, width, label='PAD Macro AUC', color=c_macro, edgecolor='none', alpha=0.95, zorder=3)
+    
+    ax.set_title("MobileNet V1–V5 Architecture Comparison (PAD-UFES-20 Clinical Benchmark)", 
+                 fontsize=16, fontweight='bold', pad=18, color='#111111')
+    ax.set_xlabel('Model Architecture & Configuration', fontsize=13, fontweight='bold', labelpad=12, color='#111111')
+    ax.set_ylabel('Performance Score [0.0 – 1.0]', fontsize=13, fontweight='bold', labelpad=10, color='#111111')
+    
+    # X-Ticks with 48-degree rotation, right alignment, and bold font
     ax.set_xticks(x)
-    ax.set_xticklabels([m.upper() for m in model_names], fontsize=10, fontweight='bold')
-    ax.set_ylim(0, 1.15)
-    ax.grid(axis='y', linestyle=':', alpha=0.7)
-    ax.legend(frameon=True, facecolor='white', framealpha=0.9, fontsize=10)
-
+    ax.set_xticklabels(clean_labels, rotation=48, ha='right', rotation_mode='anchor', 
+                       fontsize=11.5, fontweight='bold', color='#111111')
+    
+    # Y-Limits: ample room for vertical value labels and top legend
+    ax.set_ylim(0, 1.20)
+    ax.tick_params(axis='y', labelsize=11)
+    
+    # Subtle horizontal grid lines behind bars
+    ax.grid(axis='y', linestyle='--', alpha=0.55, color='#c8c8c8', zorder=0)
+    ax.set_axisbelow(True)
+    
+    # Vertical divider / group background shading for architecture families
+    current_family = None
+    family_starts = []
+    for i, name in enumerate(sorted_names):
+        lower = str(name).lower()
+        if 'ablation' in lower:
+            fam = 'Ablation'
+        elif 'backup' in lower:
+            fam = 'Backup'
+        else:
+            fam_match = re.search(r'v(\d+)', lower)
+            fam = f"V{fam_match.group(1)}" if fam_match else 'Other'
+            
+        if fam != current_family:
+            family_starts.append((i, fam))
+            current_family = fam
+            
+    for idx, (start_idx, fam) in enumerate(family_starts):
+        end_idx = family_starts[idx + 1][0] if idx + 1 < len(family_starts) else n_models
+        if idx % 2 == 1:
+            ax.axvspan(start_idx - 0.5, end_idx - 0.5, color='#efefef', alpha=0.6, zorder=1)
+        if start_idx > 0:
+            ax.axvline(start_idx - 0.5, color='#cccccc', linestyle='-', linewidth=0.9, zorder=2)
+            
     def autolabel(rects):
         for rect in rects:
             height = rect.get_height()
             if height > 0.01:
-                ax.annotate(f'{height:.3f}',
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3), textcoords="offset points",
-                            ha='center', va='bottom', fontsize=8, fontweight='bold')
-
+                ax.annotate(
+                    f'{height:.3f}',
+                    xy=(rect.get_x() + rect.get_width() / 2, height),
+                    xytext=(0, 4),
+                    textcoords="offset points",
+                    ha='center', va='bottom',
+                    rotation=90,
+                    fontsize=9.5,
+                    fontweight='bold',
+                    color='#1a1a1a'
+                )
+                
     autolabel(rects1)
     autolabel(rects2)
     autolabel(rects3)
-
+    
+    ax.legend(frameon=True, facecolor='#ffffff', edgecolor='#b0b0b0', framealpha=0.95, 
+              fontsize=12, loc='upper right', ncol=3)
+    
+    for spine in ax.spines.values():
+        spine.set_color('#b0b0b0')
+        spine.set_linewidth(0.9)
+        
     plt.tight_layout()
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(output_path, dpi=250, bbox_inches='tight')
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close(fig)
-
+        
     return fig
 
 
