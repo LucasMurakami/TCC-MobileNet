@@ -1,0 +1,185 @@
+\providecommand{\abntreprintinfo}[1]{%
+ \citeonline{#1}}
+\setlength{\labelsep}{0pt}\begin{thebibliography}{}
+\providecommand{\abntrefinfo}[3]{}
+\providecommand{\abntbstabout}[1]{}
+\abntbstabout{v-1.9.7 }
+
+\bibitem[Aksoy 2025]{mobilev3large2023}
+\abntrefinfo{Aksoy}{AKSOY}{2025}
+{AKSOY, S. Multi-input melanoma classification using mobilenet-v3-large architecture.
+\emph{Journal of Automation, Mobile Robotics and Intelligent Systems}, v.~19, 2025.
+Dispon{\'\i}vel em: \url{https://www.researchgate.net/publication/390202995\_Multi-Input\_Melanoma\_Classification\_using\_MobileNet-V3-Large\_Architecture}.}
+
+\bibitem[Chatterjee, Gil e Byun 2024]{chatterjee2024early}
+\abntrefinfo{Chatterjee, Gil e Byun}{CHATTERJEE; GIL; BYUN}{2024}
+{CHATTERJEE, S.; GIL, J.-M.; BYUN, Y.-C. Early detection of multiclass skin lesions using transfer learning-based incepx-ensemble model.
+\emph{IEEE Access}, v.~12, p. 113677--113693, 2024.
+Dispon{\'\i}vel em: \url{https://doi.org/10.1109/ACCESS.2024.3432904}.}
+
+\bibitem[Chollet 2021]{chollet2021deep}
+\abntrefinfo{Chollet}{CHOLLET}{2021}
+{CHOLLET, F. \emph{Deep Learning with Python}. 2nd. ed. Shelter Island, NY: Manning Publications, 2021.}
+
+\bibitem[Dhuhita, Ubaid e Baita 2023]{dhuhita2023mobilenet}
+\abntrefinfo{Dhuhita, Ubaid e Baita}{DHUHITA; UBAID; BAITA}{2023}
+{DHUHITA, W. M.~P.; UBAID, M.~Y.; BAITA, A. Mobilenet v2 implementation in skin cancer detection.
+\emph{ILKOM Jurnal Ilmiah}, v.~15, n.~3, p. 498--506, 2023.
+Dispon{\'\i}vel em: \url{https://doi.org/10.33096/ilkom.v15i3.1802.498-506}.}
+
+\bibitem[Esteva et al. 2017]{esteva2017dermatologist}
+\abntrefinfo{Esteva et al.}{ESTEVA et al.}{2017}
+{ESTEVA, A. et al. Dermatologist-level classification of skin cancer with deep neural networks.
+\emph{Nature}, Nature Publishing Group, v.~542, n.~7639, p. 115--118, 2017.
+Dispon{\'\i}vel em: \url{https://doi.org/10.1038/nature21056}.}
+
+\bibitem[Fawcett 2006]{fawcett2006introduction}
+\abntrefinfo{Fawcett}{FAWCETT}{2006}
+{FAWCETT, T. An introduction to {ROC} analysis.
+\emph{Pattern Recognition Letters}, Elsevier, v.~27, n.~8, p. 861--874, 2006.}
+
+\bibitem[{Google} 2025]{wightman2025mobilenetv5_google}
+\abntrefinfo{{Google}}{{Google}}{2025}
+{{Google}. \emph{MobileNetV5 Vision Encoder for Gemma 3n (Google Open Models)}. Google Developers, 2025. Keras/Gemma Architecture Repository.
+Dispon{\'\i}vel em: \url{https://github.com/keras-team/keras-hub}.}
+
+\bibitem[{Google} 2026]{gemini2026}
+\abntrefinfo{{Google}}{{Google}}{2026}
+{{Google}. \emph{Gemini}. 2026. Software de Inteligência Artificial Generativa.
+Acessado durante o desenvolvimento do projeto para revisão de estrutura, formatação de código e busca de informações guiadas.
+Dispon{\'\i}vel em: \url{https://gemini.google.com/}.}
+
+\bibitem[Guo et al. 2017]{guo2017calibration}
+\abntrefinfo{Guo et al.}{GUO et al.}{2017}
+{GUO, C. et al. On calibration of modern neural networks. In:  \emph{Proceedings of the 34th International Conference on Machine Learning (ICML)}. [S.l.]: PMLR, 2017.  (Proceedings of Machine Learning Research, v.~70), p. 1321--1330.}
+
+\bibitem[He et al. 2016]{he2016deep}
+\abntrefinfo{He et al.}{HE et al.}{2016}
+{HE, K. et al. Deep residual learning for image recognition. In:  \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}. [s.n.], 2016. p. 770--778. Dispon{\'\i}vel em: \url{https://openaccess.thecvf.com/content\_cvpr\_2016/html/He\_Deep\_Residual\_Learning\_CVPR\_2016\_paper.html}.}
+
+\bibitem[Howard et al. 2019]{howard2019mobilenetv3_google}
+\abntrefinfo{Howard et al.}{HOWARD et al.}{2019}
+{HOWARD, A. et al. Searching for {MobileNetV3}. In:  \emph{Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)}. [s.n.], 2019. p. 1314--1324. Dispon{\'\i}vel em: \url{https://openaccess.thecvf.com/content\_ICCV\_2019/html/Howard\_Searching\_for\_MobileNetV3\_ICCV\_2019\_paper.html}.}
+
+\bibitem[Howard et al. 2017]{howard2017mobilenets_google}
+\abntrefinfo{Howard et al.}{HOWARD et al.}{2017}
+{HOWARD, A.~G. et al. {MobileNets}: Efficient convolutional neural networks for mobile vision applications.
+\emph{arXiv preprint arXiv:1704.04861}, 2017.
+Dispon{\'\i}vel em: \url{https://arxiv.org/abs/1704.04861}.}
+
+\bibitem[{Instituto Nacional de C{\^a}ncer (INCA)} 2026]{inca2026estimativa}
+\abntrefinfo{{Instituto Nacional de C{\^a}ncer (INCA)}}{{Instituto Nacional de C{\^a}ncer (INCA)}}{2026}
+{{Instituto Nacional de C{\^a}ncer (INCA)}. \emph{Estimativa 2026-2028: incid{\^e}ncia de c{\^a}ncer no Brasil}.
+Rio de Janeiro, 2026. Dispon{\'\i}vel em: \url{https://www.gov.br/inca/pt-br/assuntos/cancer/numeros/estimativa}.}
+
+\bibitem[Jiang et al. 2021]{jiang2021layercam}
+\abntrefinfo{Jiang et al.}{JIANG et al.}{2021}
+{JIANG, P.-T. et al. {LayerCAM}: Exploring hierarchical class activation maps for localization.
+\emph{IEEE Transactions on Image Processing}, IEEE, v.~30, p. 5875--5888, 2021.}
+
+\bibitem[Lin et al. 2017]{lin2017focal}
+\abntrefinfo{Lin et al.}{LIN et al.}{2017}
+{LIN, T.-Y. et al. Focal loss for dense object detection. In:  \emph{Proceedings of the IEEE International Conference on Computer Vision (ICCV)}. [s.n.], 2017. p. 2980--2988. Dispon{\'\i}vel em: \url{https://openaccess.thecvf.com/content\_ICCV\_2017/papers/Lin\_Focal\_Loss\_for\_ICCV\_2017\_paper.pdf}.}
+
+\bibitem[Loshchilov e Hutter 2017]{loshchilov2017decoupled}
+\abntrefinfo{Loshchilov e Hutter}{LOSHCHILOV; HUTTER}{2017}
+{LOSHCHILOV, I.; HUTTER, F. Decoupled weight decay regularization.
+\emph{arXiv preprint arXiv:1711.05101}, 2017.
+Dispon{\'\i}vel em: \url{https://arxiv.org/abs/1711.05101}.}
+
+\bibitem[Mamun et al. 2025]{optimizing2025skin}
+\abntrefinfo{Mamun et al.}{MAMUN et al.}{2025}
+{MAMUN, A. A. et al. Optimizing deep learning for skin cancer classification: A computationally efficient cnn with minimal accuracy trade-off.
+\emph{arXiv preprint arXiv:2505.21597}, 2025.
+Dispon{\'\i}vel em: \url{https://arxiv.org/abs/2505.21597}.}
+
+\bibitem[Moreno-Torres et al. 2012]{morenotorres2012unifying}
+\abntrefinfo{Moreno-Torres et al.}{MORENO-TORRES et al.}{2012}
+{MORENO-TORRES, J.~G. et al. A unifying view on dataset shift in machine learning.
+\emph{Pattern Recognition}, Elsevier, v.~45, n.~1, p. 521--530, 2012.}
+
+\bibitem[Mota et al. 2025]{mota2025identificacao}
+\abntrefinfo{Mota et al.}{MOTA et al.}{2025}
+{MOTA, G. S. d.~L. et al. Identifica{\c{c}}{\~a}o de doen{\c{c}}as de pele malignas por meio de aprendizado profundo.
+\emph{Revista de Inform{\'a}tica Te{\'o}rica e Aplicada (RITA)}, v.~32, n.~1, p. 204--211, 2025.
+Aceito em: 03 jan. 2025.
+Dispon{\'\i}vel em: \url{https://seer.ufrgs.br/index.php/rita/article/view/143463/94911}.}
+
+\bibitem[Pacheco et al. 2020]{pacheco2020pad}
+\abntrefinfo{Pacheco et al.}{PACHECO et al.}{2020}
+{PACHECO, A. G.~C. et al. Pad-ufes-20: A skin lesion dataset composed of patient data and clinical images collected from smartphones.
+\emph{Data in Brief}, Elsevier, v.~32, p. 106221, 2020.
+Dispon{\'\i}vel em: \url{https://doi.org/10.1016/j.dib.2020.106221}.}
+
+\bibitem[Paszke et al. 2019]{paszke2019pytorch}
+\abntrefinfo{Paszke et al.}{PASZKE et al.}{2019}
+{PASZKE, A. et al. {PyTorch}: An imperative style, high-performance deep learning library. In:  \emph{Advances in Neural Information Processing Systems (NeurIPS)}. [S.l.: s.n.], 2019. v.~32, p. 8024--8035.}
+
+\bibitem[Qin et al. 2024]{qin2024mobilenetv4_google}
+\abntrefinfo{Qin et al.}{QIN et al.}{2024}
+{QIN, D. et al. {MobileNetV4} -- five to eleven times faster: Designing for mobile ecosystems. In:  \emph{Proceedings of the European Conference on Computer Vision (ECCV)}. [s.n.], 2024. p. 403--422. Dispon{\'\i}vel em: \url{https://arxiv.org/abs/2404.10518}.}
+
+\bibitem[Quionero-Candela et al. 2009]{quionero2009dataset}
+\abntrefinfo{Quionero-Candela et al.}{QUIONERO-CANDELA et al.}{2009}
+{QUIONERO-CANDELA, J. et al. (Ed.). \emph{Dataset Shift in Machine Learning}. Cambridge, MA: The MIT Press, 2009.
+ISBN 9780262170055.}
+
+\bibitem[Sandler et al. 2018]{sandler2018mobilenetv2_google}
+\abntrefinfo{Sandler et al.}{SANDLER et al.}{2018}
+{SANDLER, M. et al. {MobileNetV2}: Inverted residuals and linear bottlenecks. In:  \emph{Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)}. [s.n.], 2018. p. 4510--4520. Dispon{\'\i}vel em: \url{https://openaccess.thecvf.com/content\_cvpr\_2018/html/Sandler\_MobileNetV2\_Inverted\_Residuals\_CVPR\_2018\_paper.html}.}
+
+\bibitem[Selvaraju et al. 2017]{selvaraju2017gradcam}
+\abntrefinfo{Selvaraju et al.}{SELVARAJU et al.}{2017}
+{SELVARAJU, R.~R. et al. {Grad-CAM}: Visual explanations from deep networks via gradient-based localization. In:  \emph{Proceedings of the IEEE International Conference on Computer Vision (ICCV)}. [S.l.: s.n.], 2017. p. 618--626.}
+
+\bibitem[Shorten e Khoshgoftaar 2019]{shorten2019survey}
+\abntrefinfo{Shorten e Khoshgoftaar}{SHORTEN; KHOSHGOFTAAR}{2019}
+{SHORTEN, C.; KHOSHGOFTAAR, T.~M. A survey on image data augmentation for deep learning.
+\emph{Journal of Big Data}, Springer, v.~6, n.~1, p. 1--48, 2019.
+Dispon{\'\i}vel em: \url{https://doi.org/10.1186/s40537-019-0197-0}.}
+
+\bibitem[Simonyan e Zisserman 2014]{simonyan2014very}
+\abntrefinfo{Simonyan e Zisserman}{SIMONYAN; ZISSERMAN}{2014}
+{SIMONYAN, K.; ZISSERMAN, A. Very deep convolutional networks for large-scale image recognition.
+\emph{arXiv preprint arXiv:1409.1556}, 2014.
+Dispon{\'\i}vel em: \url{https://arxiv.org/abs/1409.1556}.}
+
+\bibitem[Sokolova e Lapalme 2009]{sokolova2009systematic}
+\abntrefinfo{Sokolova e Lapalme}{SOKOLOVA; LAPALME}{2009}
+{SOKOLOVA, M.; LAPALME, G. A systematic analysis of performance measures for classification tasks.
+\emph{Information Processing \& Management}, Elsevier, v.~45, n.~4, p. 427--437, 2009.}
+
+\bibitem[Tschandl, Rosendahl e Kittler 2018]{tschandl2018ham10000}
+\abntrefinfo{Tschandl, Rosendahl e Kittler}{TSCHANDL; ROSENDAHL; KITTLER}{2018}
+{TSCHANDL, P.; ROSENDAHL, C.; KITTLER, H. The {HAM10000} dataset, a large collection of multi-source dermatoscopic images of common pigmented skin lesions.
+\emph{Scientific Data}, v.~5, n.~1, p. 180161, 2018.
+Dispon{\'\i}vel em: \url{https://doi.org/10.1038/sdata.2018.161}.}
+
+\bibitem[Upasani et al. 2025]{lightweight2023mobilenet}
+\abntrefinfo{Upasani et al.}{UPASANI et al.}{2025}
+{UPASANI, N. et al. A lightweight mobilenet-based framework for multi-class skin cancer classification with data augmentation.
+\emph{Ing{\'e}nierie des Syst{\`e}mes d'Information}, v.~30, n.~10, p. 2763--2771, 2025.
+Dispon{\'\i}vel em: \url{https://doi.org/10.18280/isi.301021}.}
+
+\bibitem[Wang et al. 2026]{dermacalibra2026}
+\abntrefinfo{Wang et al.}{WANG et al.}{2026}
+{WANG, B. et al. Dermacalibra: A robust and explainable multimodal framework for skin lesion diagnosis via bayesian uncertainty and dynamic modulation.
+\emph{Diagnostics}, v.~16, n.~3, p.~386, 2026.
+Dispon{\'\i}vel em: \url{https://pubmed.ncbi.nlm.nih.gov/41750777/}.}
+
+\bibitem[Wightman 2019]{wightman2019timm}
+\abntrefinfo{Wightman}{WIGHTMAN}{2019}
+{WIGHTMAN, R. \emph{{PyTorch Image Models}}. [S.l.]: GitHub, 2019. \url{https://github.com/rwightman/pytorch-image-models}.}
+
+\bibitem[Wolf et al. 2025]{wolf2025deep}
+\abntrefinfo{Wolf et al.}{WOLF et al.}{2025}
+{WOLF, N.~R. et al. Deep learning in dermatology: the gap between academic research and clinical application.
+\emph{Journal of Investigative Dermatology}, v.~145, n.~2, fev 2025.}
+
+\bibitem[Zhang et al. 2018]{zhang2018mixup}
+\abntrefinfo{Zhang et al.}{ZHANG et al.}{2018}
+{ZHANG, H. et al. mixup: Beyond empirical risk minimization.
+\emph{International Conference on Learning Representations (ICLR)}, 2018.
+Dispon{\'\i}vel em: \url{https://arxiv.org/abs/1710.09412}.}
+
+\end{thebibliography}

@@ -1,0 +1,15 @@
+\babel@toc {brazilian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {brazilian}{}\relax 
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {1}{\ignorespaces Distribuição e harmonização taxonômica das classes nos datasets HAM10000 e PAD-UFES-20.}}{26}{}%
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {2}{\ignorespaces Resultados principais, média $\pm $ desvio-padrão populacional em três sementes.}}{31}{}%
+\contentsline {table}{\numberline {3}{\ignorespaces Estudo de ablação da V3 com semente 42.}}{34}{}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {table}{\numberline {4}{\ignorespaces Parâmetros arquiteturais das gerações MobileNet importadas via \texttt {timm}.}}{46}{}%
+\contentsline {table}{\numberline {5}{\ignorespaces Dicionário do Pipeline de Otimização.}}{46}{}%

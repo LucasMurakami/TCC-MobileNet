@@ -268,7 +268,7 @@ Skin lesion classification models in clinical dermatological settings require mu
 | `per_class_metrics.png` | Bar chart comparing Precision, Recall, and F1-score side-by-side for each of the 7 diagnostic classes. |
 | `training_curves.png` | Dual-axis loss and accuracy progression across Stage 1 (Warmup) and Stage 2 (Fine-Tuning). |
 | `results.json` & `classification_report.json` | Programmatically parseable metrics for tabular compilation in your thesis / paper. |
-| `benchmark_comparison.png` | Comparative bar chart summarizing accuracy and F1 across all trained models. |
+| `benchmark_comparison.png` | Comparative bar chart summarizing accuracy, melanoma AUC, macro AUC, and melanoma recall across all evaluated models. |
 
 ---
 

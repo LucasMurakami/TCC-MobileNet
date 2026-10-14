@@ -1,0 +1,381 @@
+%=======================================================================
+% MobileNet
+%=======================================================================
+
+@article{howard2017mobilenets_google,
+  title   = {{MobileNets}: Efficient Convolutional Neural Networks for Mobile Vision Applications},
+  author  = {Howard, Andrew G. and Zhu, Menglong and Chen, Bo and Kalenichenko, Dmitry and Wang, Weijun and Weyand, Tobias and Andreetto, Marco and Adam, Hartwig},
+  journal = {arXiv preprint arXiv:1704.04861},
+  year    = {2017},
+  url     = {https://arxiv.org/abs/1704.04861}
+}
+
+@inproceedings{sandler2018mobilenetv2_google,
+  title     = {{MobileNetV2}: Inverted Residuals and Linear Bottlenecks},
+  author    = {Sandler, Mark and Howard, Andrew and Zhu, Menglong and Zhmoginov, Andrey and Chen, Liang-Chieh},
+  booktitle = {Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {4510--4520},
+  year      = {2018},
+  doi       = {10.1109/CVPR.2018.00474},
+  url       = {https://openaccess.thecvf.com/content_cvpr_2018/html/Sandler_MobileNetV2_Inverted_Residuals_CVPR_2018_paper.html}
+}
+
+@inproceedings{howard2019mobilenetv3_google,
+  title     = {Searching for {MobileNetV3}},
+  author    = {Howard, Andrew and Sandler, Mark and Chu, Grace and Chen, Liang-Chieh and Chen, Bo and Tan, Mingxing and Wang, Weijun and Zhu, Yukun and Pang, Ruoming and Vasudevan, Vijay and Le, Quoc V. and Adam, Hartwig},
+  booktitle = {Proceedings of the IEEE/CVF International Conference on Computer Vision (ICCV)},
+  pages     = {1314--1324},
+  year      = {2019},
+  doi       = {10.1109/ICCV.2019.00140},
+  url       = {https://openaccess.thecvf.com/content_ICCV_2019/html/Howard_Searching_for_MobileNetV3_ICCV_2019_paper.html}
+}
+
+@inproceedings{qin2024mobilenetv4_google,
+  title     = {{MobileNetV4} -- Five to Eleven Times Faster: Designing for Mobile Ecosystems},
+  author    = {Qin, Danfeng and Leichner, Chas and Delakis, Manolis and Fornoni, Marco and Luo, Shuxiang and Yang, Fan and Wang, Weijun and Fu, Tingbo and Feng, Feng and Zhang, Tao and Wang, Liangliang and Lu, Mengdong and Yang, Frank and Howard, Andrew and Adam, Hartwig},
+  booktitle = {Proceedings of the European Conference on Computer Vision (ECCV)},
+  pages     = {403--422},
+  year      = {2024},
+  doi       = {10.1007/978-3-031-72986-7_23},
+  url       = {https://arxiv.org/abs/2404.10518}
+}
+
+@misc{wightman2025mobilenetv5_google,
+  title        = {MobileNetV5 Vision Encoder for Gemma 3n (Google Open Models)},
+  author       = {{Google}},
+  year         = {2025},
+  publisher    = {Google Developers},
+  howpublished = {Keras/Gemma Architecture Repository},
+  url          = {https://github.com/keras-team/keras-hub}
+}
+
+%=======================================================================
+% Datasets
+%=======================================================================
+
+@article{pacheco2020pad,
+  title     = {PAD-UFES-20: A skin lesion dataset composed of patient data and clinical images collected from smartphones},
+  author    = {Pacheco, Andre G. C. and Lima, Gustavo R. and Salom{\~a}o, {\'{A}}ureo S. and Balle, Bernardo K. and Carvalho, Jo{\~a}o Guilherme A. and Zampirolli, Francisco T. and Krohling, Renato A.},
+  journal   = {Data in Brief},
+  volume    = {32},
+  pages     = {106221},
+  year      = {2020},
+  publisher = {Elsevier},
+  doi       = {10.1016/j.dib.2020.106221},
+  url       = {https://doi.org/10.1016/j.dib.2020.106221}
+}
+
+@article{wolf2025deep,
+  title   = {Deep learning in dermatology: the gap between academic research and clinical application},
+  author  = {Wolf, N. R. and others},
+  journal = {Journal of Investigative Dermatology},
+  volume  = {145},
+  number  = {2},
+  year    = {2025},
+  month   = {fev}
+}
+
+@article{tschandl2018ham10000,
+  author    = {Tschandl, Philipp and Rosendahl, Cliff and Kittler, Harald},
+  title     = {The {HAM10000} dataset, a large collection of multi-source dermatoscopic images of common pigmented skin lesions},
+  journal   = {Scientific Data},
+  year      = {2018},
+  volume    = {5},
+  number    = {1},
+  pages     = {180161},
+  doi       = {10.1038/sdata.2018.161},
+  url       = {https://doi.org/10.1038/sdata.2018.161}
+}
+
+%=======================================================================
+% Fundamentação Teórica: Dados ao problema e suporte a causa
+%=======================================================================
+
+@manual{inca2026estimativa,
+  title   = {Estimativa 2026-2028: incid{\^e}ncia de c{\^a}ncer no Brasil},
+  author  = {{Instituto Nacional de C{\^a}ncer (INCA)}},
+  address = {Rio de Janeiro},
+  year    = {2026},
+  url     = {https://www.gov.br/inca/pt-br/assuntos/cancer/numeros/estimativa}
+}
+
+%=======================================================================
+% Fundamentação Teórica: Estudos e pesquisas para embasamento técnico
+%=======================================================================
+
+@book{quionero2009dataset,
+  title     = {Dataset Shift in Machine Learning},
+  editor    = {Quionero-Candela, Joaquin and Sugiyama, Masashi and Schwaighofer, Anton and Lawrence, Neil D.},
+  year      = {2009},
+  publisher = {The MIT Press},
+  address   = {Cambridge, MA},
+  isbn      = {9780262170055}
+}
+
+@article{morenotorres2012unifying,
+  title     = {A unifying view on dataset shift in machine learning},
+  author    = {Moreno-Torres, Jose G. and S{\'a}ez, Jos{\'e} A. and Llor{\`a}, Xavier and Zhou, Zhi-Hua and Herrera, Francisco},
+  journal   = {Pattern Recognition},
+  volume    = {45},
+  number    = {1},
+  pages     = {521--530},
+  year      = {2012},
+  publisher = {Elsevier},
+  doi       = {10.1016/j.patcog.2011.06.019}
+}
+
+@article{shorten2019survey,
+  title     = {A survey on image data augmentation for deep learning},
+  author    = {Shorten, Connor and Khoshgoftaar, Taghi M.},
+  journal   = {Journal of Big Data},
+  volume    = {6},
+  number    = {1},
+  pages     = {1--48},
+  year      = {2019},
+  publisher = {Springer},
+  doi       = {10.1186/s40537-019-0197-0},
+  url       = {https://doi.org/10.1186/s40537-019-0197-0}
+}
+
+@inproceedings{he2016deep,
+  title     = {Deep Residual Learning for Image Recognition},
+  author    = {He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  booktitle = {Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition (CVPR)},
+  pages     = {770--778},
+  year      = {2016},
+  doi       = {10.1109/CVPR.2016.90},
+  url       = {https://openaccess.thecvf.com/content_cvpr_2016/html/He_Deep_Residual_Learning_CVPR_2016_paper.html}
+}
+
+@article{simonyan2014very,
+  title   = {Very Deep Convolutional Networks for Large-Scale Image Recognition},
+  author  = {Simonyan, Karen and Zisserman, Andrew},
+  journal = {arXiv preprint arXiv:1409.1556},
+  year    = {2014},
+  url     = {https://arxiv.org/abs/1409.1556}
+}
+
+@book{chollet2021deep,
+  title     = {Deep Learning with Python},
+  author    = {Chollet, Fran{\c{c}}ois},
+  year      = {2021},
+  edition   = {2nd},
+  publisher = {Manning Publications},
+  address   = {Shelter Island, NY}
+}
+
+@inproceedings{lin2017focal,
+  title     = {Focal Loss for Dense Object Detection},
+  author    = {Lin, Tsung-Yi and Goyal, Priya and Girshick, Ross and He, Kaiming and Doll{\'a}r, Piotr},
+  booktitle = {Proceedings of the IEEE International Conference on Computer Vision (ICCV)},
+  pages     = {2980--2988},
+  year      = {2017},
+  doi       = {10.1109/ICCV.2017.324},
+  url       = {https://openaccess.thecvf.com/content_ICCV_2017/papers/Lin_Focal_Loss_for_ICCV_2017_paper.pdf}
+}
+
+@article{loshchilov2017decoupled,
+  title   = {Decoupled Weight Decay Regularization},
+  author  = {Loshchilov, Ilya and Hutter, Frank},
+  journal = {arXiv preprint arXiv:1711.05101},
+  year    = {2017},
+  url     = {https://arxiv.org/abs/1711.05101}
+}
+
+@inproceedings{guo2017calibration,
+  title     = {On Calibration of Modern Neural Networks},
+  author    = {Guo, Chuan and Pleiss, Geoff and Sun, Yu and Weinberger, Kilian Q.},
+  booktitle = {Proceedings of the 34th International Conference on Machine Learning (ICML)},
+  pages     = {1321--1330},
+  year      = {2017},
+  volume    = {70},
+  series    = {Proceedings of Machine Learning Research},
+  publisher = {PMLR}
+}
+
+@inproceedings{selvaraju2017gradcam,
+  title     = {{Grad-CAM}: Visual Explanations from Deep Networks via Gradient-Based Localization},
+  author    = {Selvaraju, Ramprasaath R. and Cogswell, Michael and Das, Abhishek and Vedaldi, Andrea and Parikh, Devi and Batra, Dhruv},
+  booktitle = {Proceedings of the IEEE International Conference on Computer Vision (ICCV)},
+  pages     = {618--626},
+  year      = {2017},
+  doi       = {10.1109/ICCV.2017.74}
+}
+
+@article{jiang2021layercam,
+  title     = {{LayerCAM}: Exploring Hierarchical Class Activation Maps for Localization},
+  author    = {Jiang, Peng-Tao and Zhang, Chang-Bin and Hou, Qibin and Cheng, Ming-Ming and Wei, Yunchao},
+  journal   = {IEEE Transactions on Image Processing},
+  volume    = {30},
+  pages     = {5875--5888},
+  year      = {2021},
+  publisher = {IEEE},
+  doi       = {10.1109/TIP.2021.3089943}
+}
+
+@inproceedings{paszke2019pytorch,
+  title     = {{PyTorch}: An Imperative Style, High-Performance Deep Learning Library},
+  author    = {Paszke, Adam and Gross, Sam and Massa, Francisco and Lerer, Adam and Bradbury, James and Chanan, Gregory and Killeen, Trevor and Lin, Zeming and Gimelshein, Natalia and Antiga, Luca and Desmaison, Alban and K{\"o}pf, Andreas and Yang, Edward and DeVito, Zachary and Raison, Martin and Tejani, Alykhan and Sasank, Chilamkurthy and Perez, Naman and Lu, Jack and Gu, Jeff and Chintala, Soumith},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  volume    = {32},
+  pages     = {8024--8035},
+  year      = {2019}
+}
+
+@misc{wightman2019timm,
+  author       = {Ross Wightman},
+  title        = {{PyTorch Image Models}},
+  year         = {2019},
+  publisher    = {GitHub},
+  journal      = {GitHub repository},
+  doi          = {10.5281/zenodo.4414861},
+  howpublished = {\url{https://github.com/rwightman/pytorch-image-models}}
+}
+
+%=======================================================================
+% Fundamentação Teórica: Estudos similares
+%=======================================================================
+
+@article{optimizing2025skin,
+  title   = {Optimizing Deep Learning for Skin Cancer Classification: A Computationally Efficient CNN with Minimal Accuracy Trade-Off},
+  author  = {Al Mamun, Abdullah and Ray, Pollob Chandra and Nasib, Md Rahat Ul and Das, Akash and Uddin, Jia and Absur, Md Nurul},
+  journal = {arXiv preprint arXiv:2505.21597},
+  year    = {2025},
+  url     = {https://arxiv.org/abs/2505.21597}
+}
+
+@article{dermacalibra2026,
+  title   = {DermaCalibra: A Robust and Explainable Multimodal Framework for Skin Lesion Diagnosis via Bayesian Uncertainty and Dynamic Modulation},
+  author  = {Wang, Ben and Niu, Qingjun and She, Chengying and Zhang, Jialu and Gao, Wei and Liu, Lizhuang},
+  journal = {Diagnostics},
+  volume  = {16},
+  number  = {3},
+  pages   = {386},
+  year    = {2026},
+  doi     = {10.3390/diagnostics16030386},
+  url     = {https://pubmed.ncbi.nlm.nih.gov/41750777/}
+}
+
+@article{dhuhita2023mobilenet,
+  title   = {MobileNet V2 Implementation in Skin Cancer Detection},
+  author  = {Dhuhita, Windha Mega Pradnya and Ubaid, Muhammad Yahya and Baita, Anna},
+  journal = {ILKOM Jurnal Ilmiah},
+  volume  = {15},
+  number  = {3},
+  pages   = {498--506},
+  year    = {2023},
+  doi     = {10.33096/ilkom.v15i3.1802.498-506},
+  url     = {https://doi.org/10.33096/ilkom.v15i3.1802.498-506}
+}
+
+@article{lightweight2023mobilenet,
+  title   = {A Lightweight MobileNet-Based Framework for Multi-Class Skin Cancer Classification with Data Augmentation},
+  author  = {Upasani, N. and Manna, A. and Joshi, D. and Patvardhan, N. and Bhanuse, V. R. and Jadhav, R.},
+  journal = {Ing{\'e}nierie des Syst{\`e}mes d'Information},
+  volume  = {30},
+  number  = {10},
+  pages   = {2763--2771},
+  year    = {2025},
+  doi     = {10.18280/isi.301021},
+  url     = {https://doi.org/10.18280/isi.301021}
+}
+
+@article{mobilev3large2023,
+  title   = {Multi-Input Melanoma Classification using MobileNet-V3-Large Architecture},
+  author  = {Aksoy, Serra},
+  journal = {Journal of Automation, Mobile Robotics and Intelligent Systems},
+  volume  = {19},
+  year    = {2025},
+  doi     = {10.14313/JAMRIS/1-2025/1},
+  url     = {https://www.researchgate.net/publication/390202995_Multi-Input_Melanoma_Classification_using_MobileNet-V3-Large_Architecture}
+}
+
+@article{mota2025identificacao,
+  title   = {Identifica{\c{c}}{\~a}o de Doen{\c{c}}as de Pele Malignas por Meio de Aprendizado Profundo},
+  author  = {Mota, Gabriel S{\'a}vio de Lima and Silva, Matheus Vieira da and Mari, Jo{\~a}o Fernando and Backes, Andr{\'e} Ricardo},
+  journal = {Revista de Inform{\'a}tica Te{\'o}rica e Aplicada (RITA)},
+  volume  = {32},
+  number  = {1},
+  pages   = {204--211},
+  year    = {2025},
+  doi     = {10.22456/2175-2745.143463},
+  url     = {https://seer.ufrgs.br/index.php/rita/article/view/143463/94911},
+  note    = {Aceito em: 03 jan. 2025}
+}
+
+@article{chatterjee2024early,
+  title   = {Early Detection of Multiclass Skin Lesions Using Transfer Learning-Based IncepX-Ensemble Model},
+  author  = {Chatterjee, Subhajit and Gil, Joon-Min and Byun, Yung-Cheol},
+  journal = {IEEE Access},
+  volume  = {12},
+  pages   = {113677--113693},
+  year    = {2024},
+  doi     = {10.1109/ACCESS.2024.3432904},
+  url     = {https://doi.org/10.1109/ACCESS.2024.3432904}
+}
+
+@article{esteva2017dermatologist,
+  title     = {Dermatologist-level classification of skin cancer with deep neural networks},
+  author    = {Esteva, Andre and Kuprel, Brett and Novoa, Roberto A. and Ko, Justin and Swetter, Susan M. and Blau, Helen M. and Thrun, Sebastian},
+  journal   = {Nature},
+  volume    = {542},
+  number    = {7639},
+  pages     = {115--118},
+  year      = {2017},
+  publisher = {Nature Publishing Group},
+  doi       = {10.1038/nature21056},
+  url       = {https://doi.org/10.1038/nature21056}
+}
+
+%=======================================================================
+% Metodologia: Métricas e seus conceitos
+%=======================================================================
+
+@article{sokolova2009systematic,
+  title     = {A systematic analysis of performance measures for classification tasks},
+  author    = {Sokolova, Marina and Lapalme, Guy},
+  journal   = {Information Processing \& Management},
+  volume    = {45},
+  number    = {4},
+  pages     = {427--437},
+  year      = {2009},
+  publisher = {Elsevier},
+  doi       = {10.1016/j.ipm.2009.03.002}
+}
+
+@article{fawcett2006introduction,
+  title     = {An introduction to {ROC} analysis},
+  author    = {Fawcett, Tom},
+  journal   = {Pattern Recognition Letters},
+  volume    = {27},
+  number    = {8},
+  pages     = {861--874},
+  year      = {2006},
+  publisher = {Elsevier},
+  doi       = {10.1016/j.patrec.2005.10.010}
+}
+
+%=======================================================================
+% Metodologia: Técnicas de balanceamento e tratamento ao dataset
+%=======================================================================
+
+@article{zhang2018mixup,
+  title   = {mixup: Beyond Empirical Risk Minimization},
+  author  = {Zhang, Hongyi and Cisse, Moustapha and Dauphin, Yann N. and Lopez-Paz, David},
+  journal = {International Conference on Learning Representations (ICLR)},
+  year    = {2018},
+  url     = {https://arxiv.org/abs/1710.09412}
+}
+
+%=======================================================================
+% AI usadas neste TCC
+%=======================================================================
+
+@misc{gemini2026,
+  author       = {{Google}},
+  title        = {Gemini},
+  year         = {2026},
+  howpublished = {Software de Inteligência Artificial Generativa},
+  url          = {https://gemini.google.com/},
+  note         = {Acessado durante o desenvolvimento do projeto para revisão de estrutura, formatação de código e busca de informações guiadas}
+}

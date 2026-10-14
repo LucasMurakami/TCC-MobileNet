@@ -1,0 +1,68 @@
+\babel@toc {brazilian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {brazilian}{}\relax 
+\contentsline {chapter}{\numberline {1}Introdução}{11}{}%
+\contentsline {section}{\numberline {1.1}Tema}{12}{}%
+\contentsline {section}{\numberline {1.2}Delimitação do Tema}{12}{}%
+\contentsline {section}{\numberline {1.3}Problema}{12}{}%
+\contentsline {section}{\numberline {1.4}Objetivos}{12}{}%
+\contentsline {subsection}{\numberline {1.4.1}Objetivos Específicos}{12}{}%
+\contentsline {section}{\numberline {1.5}Justificativa}{13}{}%
+\contentsline {chapter}{\numberline {2}Fundamentação Teórica}{14}{}%
+\contentsline {section}{\numberline {2.1}Câncer de Pele e a Classificação dos Datasets}{14}{}%
+\contentsline {subsection}{\numberline {2.1.1}Lesões Malignas (Câncer)}{14}{}%
+\contentsline {subsection}{\numberline {2.1.2}Lesões Pré-Malignas e Benignas}{15}{}%
+\contentsline {section}{\numberline {2.2}Inteligência Artificial e Redes Neurais Convolucionais}{15}{}%
+\contentsline {section}{\numberline {2.3}Redes Neurais e a Arquitetura MobileNet}{17}{}%
+\contentsline {subsection}{\numberline {2.3.1}Convoluções Separáveis em Profundidade}{17}{}%
+\contentsline {subsection}{\numberline {2.3.2}Evolução Arquitetural (V1 a V5)}{17}{}%
+\contentsline {section}{\numberline {2.4}Mudança de Domínio (\textit {Dataset Shift})}{18}{}%
+\contentsline {subsection}{\numberline {2.4.1}Mudança de Covariáveis (\textit {Covariate Shift})}{19}{}%
+\contentsline {subsection}{\numberline {2.4.2}Mudança de Probabilidade a Priori (\textit {Prior Probability Shift})}{19}{}%
+\contentsline {subsection}{\numberline {2.4.3}Implicações Clínicas e Metodológicas}{20}{}%
+\contentsline {section}{\numberline {2.5}Métricas de Desempenho e o Conceito de Trade-off}{20}{}%
+\contentsline {chapter}{\numberline {3}Trabalhos Relacionados}{22}{}%
+\contentsline {section}{\numberline {3.1}Otimização Computacional e \textit {Dataset Shift} na Borda}{22}{}%
+\contentsline {section}{\numberline {3.2}Aplicações da MobileNet e Vulnerabilidades Metodológicas}{22}{}%
+\contentsline {section}{\numberline {3.3}Avanços em CNNs e a Lacuna de Pesquisa}{23}{}%
+\contentsline {subsection}{\numberline {3.3.1}Diferencial deste Estudo}{23}{}%
+\contentsline {chapter}{\numberline {4}Metodologia}{25}{}%
+\contentsline {section}{\numberline {4.1}Desbalanceamento nos Datasets e Harmonização Taxonômica}{25}{}%
+\contentsline {subsection}{\numberline {4.1.1}Espaço Amostral: HAM10000 e PAD-UFES-20}{25}{}%
+\contentsline {section}{\numberline {4.2}Ambiente Computacional e Stack de Software}{26}{}%
+\contentsline {section}{\numberline {4.3}Protocolo de Treinamento em Dois Estágios (Two-Stage Transfer Learning)}{27}{}%
+\contentsline {subsection}{\numberline {4.3.1}Aumento de Dados em Tempo de Teste (TTA)}{27}{}%
+\contentsline {section}{\numberline {4.4}Particionamento Zero-Leakage e Condução dos Experimentos}{28}{}%
+\contentsline {subsection}{\numberline {4.4.1}Critério de Parada Antecipada e Múltiplas Sementes}{28}{}%
+\contentsline {section}{\numberline {4.5}Calibração de Probabilidades e Limiares Operacionais de Triagem}{28}{}%
+\contentsline {subsection}{\numberline {4.5.1}Escalonamento de Temperatura}{29}{}%
+\contentsline {subsection}{\numberline {4.5.2}Limiares Operacionais Desacoplados}{29}{}%
+\contentsline {subsection}{\numberline {4.5.3}Ajuste de Logits por Frequência a Priori (\textit {Prior Correction})}{29}{}%
+\contentsline {section}{\numberline {4.6}Interpretabilidade Visual e Mapas de Saliência}{29}{}%
+\contentsline {chapter}{\numberline {5}Resultados}{31}{}%
+\contentsline {section}{\numberline {5.1}Execução e controle de qualidade}{31}{}%
+\contentsline {section}{\numberline {5.2}Comparação das arquiteturas}{31}{}%
+\contentsline {section}{\numberline {5.3}Variação entre sementes}{32}{}%
+\contentsline {section}{\numberline {5.4}Mudança de domínio}{33}{}%
+\contentsline {section}{\numberline {5.5}Calibração e regras de decisão}{33}{}%
+\contentsline {section}{\numberline {5.6}Estudo de ablação}{34}{}%
+\contentsline {section}{\numberline {5.7}Custo estrutural e escopo de implantação}{35}{}%
+\contentsline {section}{\numberline {5.8}Análise qualitativa de interpretabilidade}{35}{}%
+\contentsline {section}{\numberline {5.9}Limitações}{36}{}%
+\contentsline {section}{\numberline {5.10}Síntese dos resultados}{37}{}%
+\contentsline {chapter}{\numberline {6}Conclusão}{38}{}%
+\contentsline {chapter}{Refer{\^e}ncias}{39}{}%
+\settowidth {\@chapnumindent }{{\sffamily \textbf {\MakeUppercase []{Ap{\^e}ndice} }}} \addtolength {\@chapnumindent }{1.8em} 
+\contentsline {chapter}{\numberline {\MakeUppercase []{Ap{\^e}ndice} A}Formulação Matemática e Operadores Analíticos}{42}{}%
+\contentsline {section}{\numberline {A.1}Harmonização Taxonômica e Espaço Amostral}{42}{}%
+\contentsline {section}{\numberline {A.2}Interpolação Estocástica (Batch Mixup)}{42}{}%
+\contentsline {section}{\numberline {A.3}Aumento de Dados em Tempo de Teste (TTA)}{43}{}%
+\contentsline {section}{\numberline {A.4}Otimização sob Desbalanceamento}{43}{}%
+\contentsline {section}{\numberline {A.5}Inferência Não-Paramétrica (Bootstrap Agrupado)}{44}{}%
+\contentsline {section}{\numberline {A.6}Calibração de Probabilidades (Temperature Scaling)}{44}{}%
+\contentsline {section}{\numberline {A.7}Limiares de Decisão (Política sens90)}{44}{}%
+\contentsline {section}{\numberline {A.8}Ajuste de Logits por Frequência a Priori (\textit {Prior Correction})}{45}{}%
+\contentsline {section}{\numberline {A.9}Mapeamento de Ativação de Classe (Grad-CAM e LayerCAM)}{45}{}%
+\contentsline {section}{\numberline {A.10}Eficiência de Convoluções Separáveis (MobileNet)}{45}{}%
+\contentsline {section}{\numberline {A.11}Métricas Diagnósticas Globais}{46}{}%
+\contentsline {section}{\numberline {A.12}Especificações de Arquitetura e Hiperparâmetros}{46}{}%

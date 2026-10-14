@@ -253,12 +253,12 @@ def update_session_leaderboard(session_dir: Path) -> pd.DataFrame:
             seed_value = data.get('seed')
             if len(rel_parts) >= 3 and rel_parts[0] == 'scenarios':
                 scenario_name = rel_parts[1]
-                model_name = rel_parts[2]
+                model_name = data.get('model', rel_parts[2])
                 if len(rel_parts) >= 5 and rel_parts[3].startswith('seed'):
                     seed_value = int(rel_parts[3][4:])
             elif len(rel_parts) >= 2:
                 scenario_name = 'standard'
-                model_name = rel_parts[0]
+                model_name = data.get('model', rel_parts[0])
             else:
                 scenario_name = 'standard'
                 model_name = data.get('model', 'unknown')

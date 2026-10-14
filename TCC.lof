@@ -1,0 +1,15 @@
+\babel@toc {brazilian}{}\relax 
+\babel@toc {english}{}\relax 
+\babel@toc {brazilian}{}\relax 
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {1}{\ignorespaces Exemplificação de arquitetura CNN.}}{16}{}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\addvspace {10\p@ }
+\contentsline {figure}{\numberline {2}{\ignorespaces Comparação consolidada das arquiteturas nos domínios HAM10000 e PAD-UFES-20.}}{32}{}%
+\contentsline {figure}{\numberline {3}{\ignorespaces Matrizes de confusão no PAD-UFES-20 para execuções representativas.}}{33}{}%
+\contentsline {figure}{\numberline {4}{\ignorespaces Diagramas de confiabilidade da V5, semente 42. A temperatura foi estimada exclusivamente no HAM-val.}}{34}{}%
+\contentsline {figure}{\numberline {5}{\ignorespaces Galerias de explicabilidade visual no PAD-UFES-20 (Grad-CAM para V4 e LayerCAM para V5). A interpretação deve permanecer qualitativa.}}{36}{}%
+\addvspace {10\p@ }
+\addvspace {10\p@ }

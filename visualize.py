@@ -18,6 +18,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 import seaborn as sns
 from PIL import Image
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc, roc_auc_score
@@ -778,15 +779,32 @@ def plot_benchmark_summary(
     accuracies = [results[m].get('pad_accuracy', results[m].get('accuracy', 0.0)) or 0.0 for m in sorted_names]
     f1_scores = [results[m].get('pad_mel_auc_roc', results[m].get('mel_auc_roc', 0.0)) or 0.0 for m in sorted_names]
     macro_f1s = [results[m].get('pad_macro_auc_roc', results[m].get('macro_auc_roc', 0.0)) or 0.0 for m in sorted_names]
+    recalls = [
+        results[m].get('pad_mel_triage_recall')
+        if results[m].get('pad_mel_triage_recall') is not None
+        else results[m].get('pad_triage_sens')
+        if results[m].get('pad_triage_sens') is not None
+        else results[m].get('pad_mel_recall')
+        if results[m].get('pad_mel_recall') is not None
+        else results[m].get('mel_recall')
+        if results[m].get('mel_recall') is not None
+        else results[m].get('pad_mal_sens_gated')
+        if results[m].get('pad_mal_sens_gated') is not None
+        else results[m].get('pad_recall')
+        if results[m].get('pad_recall') is not None
+        else results[m].get('recall', 0.0)
+        or 0.0
+        for m in sorted_names
+    ]
     
     clean_labels = [_clean_benchmark_model_name(m) for m in sorted_names]
     
     n_models = len(sorted_names)
     x = np.arange(n_models)
-    width = 0.26
+    width = 0.20
     
     # Scaled figure dimensions for publication and LaTeX inclusion
-    fig_width = max(14.0, min(18.0, n_models * 0.75))
+    fig_width = max(14.0, min(20.0, n_models * 0.85))
     fig, ax = plt.subplots(figsize=(fig_width, 8.0))
     fig.patch.set_facecolor('#ffffff')
     ax.set_facecolor('#fafafa')
@@ -795,10 +813,12 @@ def plot_benchmark_summary(
     c_acc = '#1f77b4'       # PAD Accuracy (Blue)
     c_mel = '#d95f02'       # PAD Melanoma AUC (Deep Amber/Orange)
     c_macro = '#2ca02c'     # PAD Macro AUC (Green)
+    c_rec = '#756bb1'       # PAD Melanoma Recall (Deep Lavender/Purple)
     
-    rects1 = ax.bar(x - width, accuracies, width, label='PAD Accuracy', color=c_acc, edgecolor='none', alpha=0.95, zorder=3)
-    rects2 = ax.bar(x, f1_scores, width, label='PAD Melanoma AUC', color=c_mel, edgecolor='none', alpha=0.95, zorder=3)
-    rects3 = ax.bar(x + width, macro_f1s, width, label='PAD Macro AUC', color=c_macro, edgecolor='none', alpha=0.95, zorder=3)
+    rects1 = ax.bar(x - 1.5 * width, accuracies, width, label='PAD Accuracy', color=c_acc, edgecolor='none', alpha=0.95, zorder=3)
+    rects2 = ax.bar(x - 0.5 * width, f1_scores, width, label='PAD Melanoma AUC', color=c_mel, edgecolor='none', alpha=0.95, zorder=3)
+    rects3 = ax.bar(x + 0.5 * width, macro_f1s, width, label='PAD Macro AUC', color=c_macro, edgecolor='none', alpha=0.95, zorder=3)
+    rects4 = ax.bar(x + 1.5 * width, recalls, width, label='PAD Melanoma Recall', color=c_rec, edgecolor='none', alpha=0.95, zorder=3)
     
     ax.set_title("MobileNet V1–V5 Architecture Comparison (PAD-UFES-20 Clinical Benchmark)", 
                  fontsize=16, fontweight='bold', pad=18, color='#111111')
@@ -855,15 +875,17 @@ def plot_benchmark_summary(
                     rotation=90,
                     fontsize=9.5,
                     fontweight='bold',
-                    color='#1a1a1a'
+                    color='#1a1a1a',
+                    path_effects=[pe.withStroke(linewidth=2.0, foreground='white')]
                 )
                 
     autolabel(rects1)
     autolabel(rects2)
     autolabel(rects3)
+    autolabel(rects4)
     
     ax.legend(frameon=True, facecolor='#ffffff', edgecolor='#b0b0b0', framealpha=0.95, 
-              fontsize=12, loc='upper right', ncol=3)
+              fontsize=12, loc='upper right', ncol=4)
     
     for spine in ax.spines.values():
         spine.set_color('#b0b0b0')
